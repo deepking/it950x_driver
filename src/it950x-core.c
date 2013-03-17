@@ -1294,17 +1294,66 @@ static void afa_delete(struct kref *kref)
 	kfree (dev);
 }
 */
-static int it950x_usb_open(struct inode *inode, struct file *file)
+int it950x_usb_rx_alloc_dev(struct it950x_dev* dev)
 {
-	struct it950x_dev *dev;
-	struct usb_interface *interface;
-	int subminor, mainsubminor;
 	int retval = 0;
 	int error, order, i;
 
-	deb_data("it950x_usb_rx_open function\n");
+	if (!dev) {
+		deb_data("it950x_dev is null\n");
+		return -ENODEV;
+	}
+
+	/*Allocate TX RX urb*/	
+	for (i = 0; i < URB_COUNT_RX; i++) {
+		dev->urbs_rx[i] = usb_alloc_urb(0, GFP_KERNEL);
+		if (!dev->urbs_rx[i])
+			retval = -ENOMEM;
+	}	
+	
+	/*Read Ring buffer alloc*/
+	dev->dwTolBufferSize = URB_BUFSIZE_RX * URB_COUNT_RX;
+	order = get_order(dev->dwTolBufferSize + 8);
+	dev->pRingBuffer = (Byte*)__get_free_pages(GFP_KERNEL, order);
+	//dev->pRingBuffer = kzalloc(dev->dwTolBufferSize + 8, GFP_KERNEL);
+	if (dev->pRingBuffer) {
+		dev->pFrameBuffer = dev->pRingBuffer + 16;
+		dev->pCurrBuffPointAddr = (Dword*)dev->pRingBuffer;
+		dev->pReadBuffPointAddr = (Dword*)(dev->pRingBuffer + 4);
+	}
+	
+	/* increment our usage count for the device */
+	//kref_get(&dev->kref);
+	
+#if !(defined(DTVCAM_POWER_CTRL) && defined(AVSENDER_POWER_CTRL))	
+	if(atomic_read(&dev->rx_pw_on) == 0) {
+		if(atomic_read(&dev->tx_pw_on) == 0) {
+			error = DL_ApPwCtrl(&dev, 0, 1);
+			error = DL_ApPwCtrl(&dev->DC, 1, 1);
+			atomic_set(&dev->tx_pw_on, 1);	
+			atomic_set(&dev->rx_pw_on, 1);				
+		} else {		
+			error = DL_ApPwCtrl(&dev->DC, 1, 1);
+			atomic_set(&dev->rx_pw_on, 1);	
+		}
+	}	
+#endif	
+	atomic_add(1, &dev->g_AP_use_rx);	
+	
+	return retval;
+}
+
+static int it950x_usb_open(struct inode *inode, struct file *file)
+{
+	struct it950x_dev *dev = NULL;
+	int subminor, mainsubminor;
+	struct usb_interface *interface;
+	int retval = 0;
+
 	mainsubminor = iminor(inode);
 	subminor = iminor(inode) + USB_it913x_MINOR_RANGE;
+
+	deb_data("it950x_usb_rx_open function\n");
 	interface = usb_find_interface(&it950x_driver, subminor);
 
 try:
@@ -1335,92 +1384,28 @@ try:
 	}	
 	deb_data("open RX subminor: %d\n", subminor);		
 
-	/*Allocate TX RX urb*/	
-	for (i = 0; i < URB_COUNT_RX; i++) {
-		dev->urbs_rx[i] = usb_alloc_urb(0, GFP_KERNEL);
-		if (!dev->urbs_rx[i])
-			retval = -ENOMEM;
-	}	
-	
-	/*Read Ring buffer alloc*/
-	dev->dwTolBufferSize = URB_BUFSIZE_RX * URB_COUNT_RX;
-	order = get_order(dev->dwTolBufferSize + 8);
-	dev->pRingBuffer = (Byte*)__get_free_pages(GFP_KERNEL, order);
-	//dev->pRingBuffer = kzalloc(dev->dwTolBufferSize + 8, GFP_KERNEL);
-	if (dev->pRingBuffer) {
-		dev->pFrameBuffer = dev->pRingBuffer + 16;
-		dev->pCurrBuffPointAddr = (Dword*)dev->pRingBuffer;
-		dev->pReadBuffPointAddr = (Dword*)(dev->pRingBuffer + 4);
-	}
-	
-	/* increment our usage count for the device */
-	//kref_get(&dev->kref);
-	
+        retval = it950x_usb_rx_alloc_dev(dev);
+        if (retval)
+            return retval;
+
 	/* save our object in the file's private structure */
 	dev->file = file;
 	file->private_data = dev;
-	
-#if !(defined(DTVCAM_POWER_CTRL) && defined(AVSENDER_POWER_CTRL))	
-	if(atomic_read(&dev->rx_pw_on) == 0) {
-		if(atomic_read(&dev->tx_pw_on) == 0) {
-			error = DL_ApPwCtrl(&dev, 0, 1);
-			error = DL_ApPwCtrl(&dev->DC, 1, 1);
-			atomic_set(&dev->tx_pw_on, 1);	
-			atomic_set(&dev->rx_pw_on, 1);				
-		} else {		
-			error = DL_ApPwCtrl(&dev->DC, 1, 1);
-			atomic_set(&dev->rx_pw_on, 1);	
-		}
-	}	
-#endif	
-	atomic_add(1, &dev->g_AP_use_rx);	
-	
+
 exit:
 	return retval;
 }
 
-static int it950x_usb_tx_open(struct inode *inode, struct file *file)
+int it950x_usb_tx_alloc_dev(struct it950x_dev *dev)
 {
-	struct it950x_dev *dev;
-	struct usb_interface *interface;
-	int mainsubminor, subminor;
 	int retval = 0;
 	int error;
 	int order, order_cmd;
-
-	deb_data("it950x_usb_tx_open function\n");
 	
-	mainsubminor = iminor(inode);	
-	subminor = iminor(inode);
-	interface = usb_find_interface(&it950x_driver, subminor);
-
-try:
-	while (!interface) {
-		subminor++;
-		interface = usb_find_interface(&it950x_driver, subminor);
-		if (subminor >= mainsubminor + USB_it950x_MINOR_RANGE)
-			break;
-	}		
-	
-	if (!interface) {
-		deb_data("%s - error, can't find device for minor %d",
-		     __FUNCTION__, subminor);
-		retval = -ENODEV;
-		goto exit;
-	}
-	dev = usb_get_intfdata(interface);
-	
-	if (!dev) {
-		deb_data("usb_get_intfdata fail!\n");
-		retval = -ENODEV;
-		goto exit;
-	}
-	
-	if (subminor != dev->tx_chip_minor) {
-		interface = NULL;
-		goto try;
+	if (dev == NULL) {
+		deb_data("dev is NULL\n");
+		return -ENODEV;
 	}	
-	deb_data("open TX subminor: %d\n", subminor);			
 	
 	atomic_set(&dev->urb_counter, URB_COUNT_TX);
 	atomic_set(&dev->urb_counter_low_brate, URB_COUNT_TX_LOW_BRATE);
@@ -1484,10 +1469,6 @@ try:
 		
 	/* increment our usage count for the device */
 	//kref_get(&dev->kref);
-	
-	/* save our object in the file's private structure */
-	dev->tx_file = file;
-	file->private_data = dev;
 
 #if !(defined(DTVCAM_POWER_CTRL) && defined(AVSENDER_POWER_CTRL))
 	if(atomic_read(&dev->tx_pw_on) == 0) {
@@ -1497,17 +1478,69 @@ try:
 #endif		
 
 	atomic_add(1, &dev->g_AP_use_tx);
-exit:
+
 	return retval;
 }
 
-static int it950x_usb_release(struct inode *inode, struct file *file)
+static int it950x_usb_tx_open(struct inode *inode, struct file *file)
 {
-	struct it950x_dev *dev;
+	struct it950x_dev *dev = NULL;
+	int mainsubminor, subminor;
+	struct usb_interface *interface;
+	int retval = 0;
+
+	deb_data("it950x_usb_tx_open function\n");
+
+	mainsubminor = iminor(inode);	
+	subminor = iminor(inode);
+
+	interface = usb_find_interface(&it950x_driver, subminor);
+
+try:
+	while (!interface) {
+		subminor++;
+		interface = usb_find_interface(&it950x_driver, subminor);
+		if (subminor >= mainsubminor + USB_it950x_MINOR_RANGE)
+			break;
+	}		
+	
+	if (!interface) {
+		deb_data("%s - error, can't find device for minor %d",
+		     __FUNCTION__, subminor);
+		retval = -ENODEV;
+		goto exit;
+	}
+	dev = usb_get_intfdata(interface);
+	
+	if (!dev) {
+		deb_data("usb_get_intfdata fail!\n");
+		retval = -ENODEV;
+		goto exit;
+	}
+	
+	if (subminor != dev->tx_chip_minor) {
+		interface = NULL;
+		goto try;
+	}	
+	deb_data("open TX subminor: %d\n", subminor);			
+
+	retval = it950x_usb_tx_alloc_dev(dev);
+	if (retval)
+	    return retval;
+
+	/* save our object in the file's private structure */
+	dev->tx_file = file;
+	file->private_data = dev;
+
+exit:
+        return retval;
+}
+
+int it950x_usb_rx_free_dev(struct it950x_dev* dev)
+{
 	int error, i;
 	int order;
 	//deb_data("it950x_usb_release function\n");
-	dev = (struct it950x_dev *)file->private_data;
 	if (dev == NULL) {
 		deb_data("dev is NULL\n");
 		return -ENODEV;
@@ -1523,9 +1556,9 @@ static int it950x_usb_release(struct inode *inode, struct file *file)
 		}
 		dev->g_AP_use--;*/
 		
-		dev = (struct it950x_dev *)file->private_data;
-		if (dev == NULL)
-			return -ENODEV;
+		//dev = (struct it950x_dev *)file->private_data;
+		//if (dev == NULL)
+		//	return -ENODEV;
 
 		/* decrement the count on our device */
 		//kref_put(&dev->kref, afa_delete);
@@ -1561,13 +1594,19 @@ static int it950x_usb_release(struct inode *inode, struct file *file)
 	return 0;
 }
 
-static int it950x_usb_tx_release(struct inode *inode, struct file *file)
+static int it950x_usb_release(struct inode *inode, struct file *file)
 {
-	struct it950x_dev *dev;
+	struct it950x_dev *dev = NULL;
+	dev = (struct it950x_dev *)file->private_data;
+
+	return it950x_usb_rx_free_dev(dev);
+}
+
+int it950x_usb_tx_free_dev(struct it950x_dev* dev)
+{
 	int error;
 	int order;
 	//deb_data("it950x_usb_release function\n");	
-	dev = (struct it950x_dev *)file->private_data;
 	if (dev == NULL) {
 		deb_data("dev is NULL\n");
 		return -ENODEV;
@@ -1575,9 +1614,9 @@ static int it950x_usb_tx_release(struct inode *inode, struct file *file)
 
 	if(	atomic_read(&dev->g_AP_use_tx) == 1) {
 		
-		dev = (struct it950x_dev *)file->private_data;
-		if (dev == NULL)
-			return -ENODEV;
+		//dev = (struct it950x_dev *)file->private_data;
+		//if (dev == NULL)
+		//	return -ENODEV;
 
 		stop_urb_write_transfer(dev);
 
@@ -1616,16 +1655,20 @@ static int it950x_usb_tx_release(struct inode *inode, struct file *file)
 	return 0;
 }
 
-
-static int it950x_usb_ioctl(struct inode *inode, struct file *file,
-	unsigned int cmd,  unsigned long parg)
+static int it950x_usb_tx_release(struct inode *inode, struct file *file)
 {
 	struct it950x_dev *dev;
+	dev = (struct it950x_dev *)file->private_data;
+
+	return it950x_usb_tx_free_dev(dev);
+}
+
+int it950x_usb_rx_ioctl_dev(struct it950x_dev* dev,
+	unsigned int cmd,  unsigned long parg)
+{
 	Byte temp0 = 0, temp1 = 1;
 	Dword status;
-	deb_data("it9507_usb_ioctl function\n");
   
-	dev = (struct it950x_dev *)file->private_data;
 	if (dev == NULL) {
 		deb_data("dev is NULL\n");
 		return -ENODEV;
@@ -1672,6 +1715,16 @@ static int it950x_usb_ioctl(struct inode *inode, struct file *file,
 	return DL_DemodIOCTLFun((void *)&dev->DC.demodulator, (DWORD)cmd, parg);
 }
 
+static int it950x_usb_ioctl(struct inode *inode, struct file *file,
+	unsigned int cmd,  unsigned long parg)
+{
+	struct it950x_dev *dev;
+	deb_data("it9507_usb_ioctl function\n");
+	dev = (struct it950x_dev *)file->private_data;
+
+	return it950x_usb_rx_ioctl_dev(dev, cmd, parg);
+}
+
 int SetLowBitRateTransfer(struct it950x_dev *dev, void *parg)
 {
 	//unsigned char b_buf[188];
@@ -1687,15 +1740,11 @@ int SetLowBitRateTransfer(struct it950x_dev *dev, void *parg)
 	return 0;
 }
 
-static int it950x_usb_tx_ioctl(struct inode *inode, struct file *file,
+int it950x_usb_tx_ioctl_dev(struct it950x_dev* dev,
 	unsigned int cmd,  unsigned long parg)
 {
-	struct it950x_dev *dev;
 	PCmdRequest pRequest;
 	
-	deb_data("it950x_usb_tx_ioctl function\n");
-	
-	dev = (struct it950x_dev *)file->private_data;
 	if (dev == NULL) {
 		deb_data("dev is NULL\n");
 		return -ENODEV;
@@ -1739,18 +1788,24 @@ static int it950x_usb_tx_ioctl(struct inode *inode, struct file *file,
 	return DL_DemodIOCTLFun((void *)&dev->DC.modulator, (DWORD)cmd, parg);
 }
 
+static int it950x_usb_tx_ioctl(struct inode *inode, struct file *file,
+	unsigned int cmd,  unsigned long parg)
+{
+	struct it950x_dev *dev;
 
-int it950x_usb_unlocked_ioctl(
-	struct file *file,
+	deb_data("it950x_usb_tx_ioctl function\n");
+	dev = (struct it950x_dev *)file->private_data;
+
+	return it950x_usb_tx_ioctl_dev(dev, cmd, parg);
+}
+
+int it950x_usb_rx_unlocked_ioctl_dev(
+	struct it950x_dev *dev,
 	unsigned int cmd,
 	unsigned long parg)
 {
-
-	struct it950x_dev *dev;
-	
 	//deb_data("it950x_usb_ioctl function\n");
 
-	dev = (struct it950x_dev *)file->private_data;
 	if (dev == NULL) {
 		deb_data("dev is NULL\n");
 		return -ENODEV;
@@ -1778,16 +1833,25 @@ int it950x_usb_unlocked_ioctl(
 	return DL_DemodIOCTLFun((void *)&dev->DC.demodulator, (DWORD)cmd, parg);
 }
 
-int it950x_usb_tx_unlocked_ioctl(
+int it950x_usb_unlocked_ioctl(
 	struct file *file,
 	unsigned int cmd,
 	unsigned long parg)
 {
-	struct it950x_dev *dev;
+        struct it950x_dev *dev = NULL;
+	dev = (struct it950x_dev *)file->private_data;
+	
+	return it950x_usb_rx_unlocked_ioctl_dev(dev, cmd, parg);
+}
+
+int it950x_usb_tx_unlocked_ioctl_dev(
+	struct it950x_dev *dev,
+	unsigned int cmd,
+	unsigned long parg)
+{
 	PCmdRequest pRequest;	
 	//deb_data("it950x_usb_ioctl function\n");
 
-	dev = (struct it950x_dev *)file->private_data;
 	if (dev == NULL) {
 		deb_data("dev is NULL\n");
 		return -ENODEV;
@@ -1832,16 +1896,23 @@ int it950x_usb_tx_unlocked_ioctl(
 }
 
 
-
-static ssize_t it950x_read(
-	struct file *file, 
-	char __user *buf,
-	size_t count, 
-	loff_t *ppos)
+int it950x_usb_tx_unlocked_ioctl(
+	struct file *file,
+	unsigned int cmd,
+	unsigned long parg)
 {
-	struct it950x_dev *dev0;
+        struct it950x_dev* dev = NULL;
+	dev = (struct it950x_dev *)file->private_data;
+
+        return  it950x_usb_tx_unlocked_ioctl_dev(dev, cmd, parg);
+}
+
+ssize_t it950x_usb_rx_read_dev(
+	struct it950x_dev *dev0,
+	char __user *buf,
+	size_t count)
+{
 	Dword Len = count;
-	dev0 = (struct it950x_dev *)file->private_data;
 	if (dev0 == NULL)
 		return -ENODEV;
 
@@ -1875,19 +1946,26 @@ static ssize_t it950x_read(
 
 }
 
-static ssize_t it950x_tx_write(
-	struct file *file,
-	const char __user *user_buffer,
+static ssize_t it950x_read(
+	struct file *file, 
+	char __user *buf,
 	size_t count, 
 	loff_t *ppos)
 {
-	struct it950x_dev *dev;
+        struct it950x_dev* dev = NULL;
+	dev = (struct it950x_dev *)file->private_data;
 
+        return it950x_usb_rx_read_dev(dev, buf, count);
+}
+
+ssize_t it950x_usb_tx_write_dev(
+	struct it950x_dev *dev,
+	const char __user *user_buffer,
+	size_t count)
+{
 	Dword Len = count;
 	DWORD dwError = Error_NO_ERROR;
 
-	/*AirHD RingBuffer*/
-	dev = (struct it950x_dev *)file->private_data;
 	if (dev == NULL)
 		return -ENODEV;
 #if URB_TEST
@@ -1919,6 +1997,19 @@ static ssize_t it950x_tx_write(
 	
 	return count;
 #endif
+}
+
+static ssize_t it950x_tx_write(
+	struct file *file,
+	const char __user *user_buffer,
+	size_t count, 
+	loff_t *ppos)
+{
+        struct it950x_dev *dev = NULL;
+	/*AirHD RingBuffer*/
+	dev = (struct it950x_dev *)file->private_data;
+
+	return it950x_usb_tx_write_dev(dev, user_buffer, count);
 }
 
 
@@ -2206,3 +2297,16 @@ MODULE_AUTHOR("Jason Dong <jason.dong@ite.com.tw>");
 MODULE_DESCRIPTION("DTV Native Driver for Device Based on ITEtech it950x");
 MODULE_VERSION(DRIVER_RELEASE_VERSION);
 MODULE_LICENSE("GPL");
+
+/*
+EXPORT_SYMBOL(it950x_usb_tx_alloc_dev);
+EXPORT_SYMBOL(it950x_usb_tx_free_dev);
+EXPORT_SYMBOL(it950x_usb_tx_ioctl_dev);
+EXPORT_SYMBOL(it950x_usb_tx_unlocked_ioctl_dev);
+EXPORT_SYMBOL(it950x_usb_tx_write_dev);
+EXPORT_SYMBOL(it950x_usb_rx_alloc_dev);
+EXPORT_SYMBOL(it950x_usb_rx_free_dev);
+EXPORT_SYMBOL(it950x_usb_rx_ioctl_dev);
+EXPORT_SYMBOL(it950x_usb_rx_unlocked_ioctl_dev);
+EXPORT_SYMBOL(it950x_usb_rx_read_dev);
+*/

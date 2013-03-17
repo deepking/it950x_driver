@@ -274,5 +274,22 @@ extern DWORD DL_LoadIQtable_Fromfile(void *handle);
 //extern DWORD DL_ReadRegisters (void * handle, BYTE ucSlaveDemod, Processor	processor, DWORD wReg, BYTE ucpValueLength, BYTE* ucpValue);
 //extern void it9507_set_remote_config(struct usb_device *udev, struct dvb_usb_device_properties *props);
 
+
+struct it950x_dev;
+
+// tx api
+int it950x_usb_tx_alloc_dev(struct it950x_dev*);
+int it950x_usb_tx_free_dev(struct it950x_dev*);
+int it950x_usb_tx_ioctl_dev(struct it950x_dev*, unsigned int,  unsigned long);
+int it950x_usb_tx_unlocked_ioctl_dev(struct it950x_dev*, unsigned int, unsigned long);
+ssize_t it950x_usb_tx_write_dev(struct it950x_dev*, const char*, size_t);
+
+// rx api
+int it950x_usb_rx_alloc_dev(struct it950x_dev*);
+int it950x_usb_rx_free_dev(struct it950x_dev*);
+int it950x_usb_rx_ioctl_dev(struct it950x_dev*, unsigned int,  unsigned long);
+int it950x_usb_rx_unlocked_ioctl_dev(struct it950x_dev*, unsigned int, unsigned long);
+ssize_t it950x_usb_rx_read_dev(struct it950x_dev*, char *, size_t);
+
 #endif
 
