@@ -1,5 +1,6 @@
 #include "it950x-core.h"
 #include "modulatorIocontrol.h"
+#include "dvb_net.h"
 
 // Register a USB device node
 
@@ -118,6 +119,8 @@ struct it950x_dev {
 	Dword dwRemaingBufferSize_cmd;	
 	Byte urb_index_cmd;
 	//Byte urb_use_count_cmd;
+	
+	dvb_netdev* dvbdev;
 };
 
 #define to_afa_dev(d) container_of(d, struct it950x_dev, kref)
@@ -2141,6 +2144,14 @@ static int it950x_probe(struct usb_interface *intf, const struct usb_device_id *
 #endif	
 	deb_data("USB ITEtech device now attached to USBSkel-%d \n", intf->minor);
 
+        // init dvb netdevice
+        // 
+        dvb_netdev* dvbdev = dvb_alloc_netdev(dev);
+	if (dvbdev == NULL)
+	    deb_data("alloc netdev fail\n");
+
+        dev->dvbdev = dvbdev;
+        
 	return retval;
 }
 
@@ -2252,6 +2263,8 @@ static void it950x_disconnect(struct usb_interface *intf)
 		if(dev->tx_file) dev->tx_file->private_data = NULL;
 		kfree(dev);
 	}
+
+	dvb_free_netdev(dev->dvbdev);
 	
 	deb_data("USB ITEtech #%d now disconnected", minor);
 }
