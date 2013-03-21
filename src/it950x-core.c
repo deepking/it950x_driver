@@ -1051,7 +1051,7 @@ static int start_urb_write_transfer(struct it950x_dev *dev)
 	struct urb *purb;
 	int i, ret = -ENOMEM;
 
-	//deb_data("%s()\n", __func__);
+	deb_data("%s()\n", __func__);
 #if URB_TEST
 	min_1 = 0;
 #endif	
@@ -1853,7 +1853,7 @@ int it950x_usb_tx_unlocked_ioctl_dev(
 	unsigned long parg)
 {
 	PCmdRequest pRequest;	
-	//deb_data("it950x_usb_ioctl function\n");
+	deb_data("it950x_usb_ioctl function %u\n", cmd);
 
 	if (dev == NULL) {
 		deb_data("dev is NULL\n");

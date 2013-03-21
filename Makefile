@@ -12,7 +12,7 @@ usb-it950x-objs := \
 		tuner.o cmd.o IT9133.o ADF4351.o \
 		IT9507.o Omega.o eagleTuner.o \
 		standard.o usb2impl.o modulatorUser.o user.o \
-		dvb_net.o
+		dvb_net.o dvb_api.o
 
 obj-m += usb-it950x.o 
 

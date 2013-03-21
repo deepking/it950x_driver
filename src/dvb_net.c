@@ -9,6 +9,8 @@
 #include <linux/ctype.h>
 
 #include "dvb_net.h"
+#include "dvb_api.h"
+#include "error.h"
 
 #define _debug(fmt, args...)
 
@@ -38,11 +40,29 @@ static void hexdump( const unsigned char *buf, unsigned short len )
         printk( KERN_WARNING "%s\n", str );
     }
 }
+
 static int dvb_net_tx(struct sk_buff *skb, struct net_device *dev)
 {
+    dvb_netdev* netdev = netdev_priv(dev);
+    Dword len = 0;
+    Byte NullPacket[188]={0x47,0x1f,0xaf,0x1c,0x00,0x00};
+    NullPacket[4] = 'h';
+    NullPacket[5] = 'a';
+    NullPacket[6] = 'h';
+    NullPacket[7] = 'a';
+    NullPacket[8] = '\n';
+    NullPacket[9] = '\0';
+
+
     printk(KERN_INFO "dvbnet tx");
     hexdump(skb->data, skb->len);
     /* dev_kfree_skb(skb); */
+    //len = g_ITEAPI_TxSendTSData(netdev->itdev, skb->data, skb->len);
+    len = g_ITEAPI_TxSendTSData(netdev->itdev, NullPacket, 188);
+    if (len != 188) {
+        printk(KERN_ERR "sendTsData error %ld\n", len);
+        return len; //XXX
+    }
     return NETDEV_TX_OK;
 }
 
@@ -67,6 +87,7 @@ static int dvb_net_set_mac (struct net_device *dev, void *p)
 
 static int dvb_net_open(struct net_device *dev)
 {
+    Dword dwError = 0;
     printk(KERN_INFO "dvbnet open.\n");
     /* struct dvb_net_priv *priv = netdev_priv(dev); */
 
@@ -75,6 +96,39 @@ static int dvb_net_open(struct net_device *dev)
 
     /* memcpy(dev->dev_addr, "\0DVB0", ETH_ALEN); */
     /* netif_start_queue(dev); */
+
+    dvb_netdev* netdev = netdev_priv(dev);
+    dwError = g_ITEAPI_TxSetChannel(netdev->itdev, 666000, 8000);
+    if (dwError != Error_NO_ERROR) {
+        printk(KERN_ERR "set channel fail %ld\n" + dwError);
+        return dwError;
+    }
+
+    SetModuleRequest req;
+    req.chip = 0;
+    //printf("\n=> Please Input constellation (0:QPSK  1:16QAM  2:64QAM): ");
+    req.constellation = (Byte) 1;
+
+    //printf("\n=> Please Input Code Rate"); printf(" (0:1/2  1:2/3  2:3/4  3:5/6  4:7/8): ");
+    req.highCodeRate = (Byte) 1;
+
+    //printf("\n=> Please Input Interval (0:1/32  1:1/16  2:1/8  3:1/4): ");
+    req.interval = (Byte) 3;
+    
+    //printf("\n=> Please Input Transmission Mode (0:2K  1:8K): ");
+    req.transmissionMode = (Byte) 1;
+
+    dwError = g_ITEAPI_TxSetChannelModulation(netdev->itdev, &req);
+    if (dwError != Error_NO_ERROR) {
+        printk(KERN_ERR "setChannelModulation %ld\n", dwError);
+        return dwError;
+    }
+
+    dwError = g_ITEAPI_StartTransfer(netdev->itdev);
+    if (dwError != Error_NO_ERROR) {
+        printk(KERN_ERR "startTransfer %ld\n", dwError);
+        return dwError;
+    }
     return 0;
 }
 
@@ -166,6 +220,10 @@ dvb_netdev* dvb_alloc_netdev(struct it950x_dev* itdev)
     dev->itdev = itdev;
     dev->netdev = netdev;
 
+    // open tx
+    it950x_usb_tx_alloc_dev(dev->itdev);
+    // TODO: open rx
+
     err = register_netdev(netdev);
     if (err) {
         printk(KERN_ERR "dvbnet register err\n");
@@ -219,4 +277,3 @@ static __exit void dvb_net_cleanup_module(void)
 module_init(dvb_net_init_module);
 module_exit(dvb_net_cleanup_module);
 */
-
