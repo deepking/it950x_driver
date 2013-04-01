@@ -6,13 +6,24 @@
 #include <linux/mm.h>
 #include <linux/netdevice.h>
 #include <linux/etherdevice.h>
+#include <linux/ip.h>          /* struct iphdr */
 #include <linux/ctype.h>
+
+#include <linux/workqueue.h>    /* We scheduale tasks here */
+#include <linux/sched.h>        /* We need to put ourselves to sleep 
+                                   and wake up later */
 
 #include "dvb_net.h"
 #include "dvb_api.h"
 #include "error.h"
 
 #define _debug(fmt, args...)
+
+static void intrpt_routine(struct work_struct*);
+static int die = 0;     /* set this to 1 for shutdown */
+static struct workqueue_struct *my_workqueue;
+static DECLARE_DELAYED_WORK(ReadTask, intrpt_routine);
+static struct it950x_dev* itdev;
 
 static void hexdump( const unsigned char *buf, unsigned short len )
 {
@@ -41,6 +52,88 @@ static void hexdump( const unsigned char *buf, unsigned short len )
     }
 }
 
+static void intrpt_routine(struct work_struct* work)
+{
+    Dword len = 188;
+    Dword err = 0;
+    Byte buf[len];
+
+    if (!itdev)
+        return;
+
+    printk(KERN_INFO "[dvbnet] rx run\n");
+
+    memset(buf, 0, len);
+
+    err = DTV_GetData(itdev, buf, &len);
+    if (err) {
+        printk(KERN_ERR "DTV_GetData error %lu\n", err);
+    }
+    else {
+        printk(KERN_INFO "[dvbnet] rx\n");
+        hexdump(buf, len);
+    }
+
+    /* If cleanup wants us to die */
+    if (!die)
+        queue_delayed_work(my_workqueue, &ReadTask, 1000);
+}
+
+void startCapture(struct it950x_dev* dev)
+{
+    Dword err = 0;
+
+    err = DTV_AcquireChannel(dev, 666000, 8000);
+    if (err) {
+        printk(KERN_ERR "DTV_AcquireChannel error %ld\n", err);
+        return;
+    }
+
+    err = DTV_DisablePIDTbl(dev);
+    if (err) {
+        printk(KERN_ERR "DTV_DisablePIDTbl error %lu\n", err);
+        return;
+    }
+
+    /*
+    bool bLocked = false;
+    err = DTV_IsLocked(dev, &bLocked);
+    if (err) {
+        printk(KERN_ERR "DTV_IsLocked error %lu\n", err);
+        return;
+    }
+
+    if (bLocked) {
+        printk(KERN_INFO "[dvbnet] Channel locked!!\n");
+    }
+    else {
+        printk(KERN_ERR "[dvbnet] Channel unlocked!!\n");
+    }
+    */
+
+    err = DTV_StartCapture(dev);
+    if (err) {
+        printk(KERN_ERR "DTV_StartCapture error %lu\n", err);
+        return;
+    }
+
+    itdev = dev;
+
+    //my_workqueue = create_workqueue("workqueue");
+    //queue_delayed_work(my_workqueue, &ReadTask, 1000);
+
+    printk(KERN_INFO "dvbnet startCapture ok!\n");
+}
+
+void stopCapture(void)
+{
+    die = 1;
+    if (itdev) {
+        DTV_StopCapture(itdev);
+        itdev = NULL;
+    }
+}
+
 static int dvb_net_tx(struct sk_buff *skb, struct net_device *dev)
 {
     dvb_netdev* netdev = netdev_priv(dev);
@@ -54,15 +147,15 @@ static int dvb_net_tx(struct sk_buff *skb, struct net_device *dev)
     NullPacket[9] = '\0';
 
 
-    printk(KERN_INFO "dvbnet tx");
-    hexdump(skb->data, skb->len);
+    //printk(KERN_INFO "dvbnet tx");
+    //hexdump(skb->data, skb->len);
     /* dev_kfree_skb(skb); */
     //len = g_ITEAPI_TxSendTSData(netdev->itdev, skb->data, skb->len);
-    len = g_ITEAPI_TxSendTSData(netdev->itdev, NullPacket, 188);
-    if (len != 188) {
-        printk(KERN_ERR "sendTsData error %ld\n", len);
-        return len; //XXX
-    }
+    /* len = g_ITEAPI_TxSendTSData(netdev->itdev, NullPacket, 188); */
+    /* if (len != 188) { */
+    /*     printk(KERN_ERR "sendTsData error %ld\n", len); */
+    /*     return len; //XXX */
+    /* } */
     return NETDEV_TX_OK;
 }
 
@@ -85,26 +178,17 @@ static int dvb_net_set_mac (struct net_device *dev, void *p)
     return 0;
 }
 
-static int dvb_net_open(struct net_device *dev)
+static Dword startTransfer(struct it950x_dev* dev)
 {
     Dword dwError = 0;
-    printk(KERN_INFO "dvbnet open.\n");
-    /* struct dvb_net_priv *priv = netdev_priv(dev); */
+    SetModuleRequest req;
 
-    /* priv->in_use++; */
-    /* dvb_net_feed_start(dev); */
-
-    /* memcpy(dev->dev_addr, "\0DVB0", ETH_ALEN); */
-    /* netif_start_queue(dev); */
-
-    dvb_netdev* netdev = netdev_priv(dev);
-    dwError = g_ITEAPI_TxSetChannel(netdev->itdev, 666000, 8000);
+    dwError = g_ITEAPI_TxSetChannel(dev, 666000, 8000);
     if (dwError != Error_NO_ERROR) {
-        printk(KERN_ERR "set channel fail %ld\n" + dwError);
+        printk(KERN_ERR "set channel fail %ld\n", dwError);
         return dwError;
     }
 
-    SetModuleRequest req;
     req.chip = 0;
     //printf("\n=> Please Input constellation (0:QPSK  1:16QAM  2:64QAM): ");
     req.constellation = (Byte) 1;
@@ -118,23 +202,46 @@ static int dvb_net_open(struct net_device *dev)
     //printf("\n=> Please Input Transmission Mode (0:2K  1:8K): ");
     req.transmissionMode = (Byte) 1;
 
-    dwError = g_ITEAPI_TxSetChannelModulation(netdev->itdev, &req);
+    dwError = g_ITEAPI_TxSetChannelModulation(dev, &req);
     if (dwError != Error_NO_ERROR) {
         printk(KERN_ERR "setChannelModulation %ld\n", dwError);
         return dwError;
     }
 
-    dwError = g_ITEAPI_StartTransfer(netdev->itdev);
+    dwError = g_ITEAPI_StartTransfer(dev);
     if (dwError != Error_NO_ERROR) {
         printk(KERN_ERR "startTransfer %ld\n", dwError);
         return dwError;
     }
+
+    return dwError;
+}
+
+static int dvb_net_open(struct net_device *dev)
+{
+    dvb_netdev* netdev = NULL;
+    Dword dwError = 0;
+    printk(KERN_INFO "dvbnet open.\n");
+    /* struct dvb_net_priv *priv = netdev_priv(dev); */
+
+    /* priv->in_use++; */
+    /* dvb_net_feed_start(dev); */
+
+    /* memcpy(dev->dev_addr, "\0DVB0", ETH_ALEN); */
+    /* netif_start_queue(dev); */
+
+    netdev = netdev_priv(dev);
+
+    startTransfer(netdev->itdev);
+    startCapture(netdev->itdev);
+
     return 0;
 }
 
 static int dvb_net_stop(struct net_device *dev)
 {
     printk(KERN_INFO "dvbnet stop.\n");
+    stopCapture();
     /* struct dvb_net_priv *priv = netdev_priv(dev); */
 
     /* priv->in_use--; */
@@ -210,19 +317,30 @@ dvb_netdev* dvb_alloc_netdev(struct it950x_dev* itdev)
 {
     int err = 0;
     struct net_device *netdev = NULL;
+    dvb_netdev* dev;
+
     netdev = alloc_netdev(sizeof(dvb_netdev), "dvb%d", dvb_net_setup);
     if (!netdev) {
         printk(KERN_ERR "dvbnet alloc netdev err\n");
         return NULL;
     }
 
-    dvb_netdev* dev = netdev_priv(netdev);
+    dev = netdev_priv(netdev);
     dev->itdev = itdev;
     dev->netdev = netdev;
 
-    // open tx
-    it950x_usb_tx_alloc_dev(dev->itdev);
-    // TODO: open rx
+    // TODO clear while fail
+    err = it950x_usb_rx_alloc_dev(dev->itdev);
+    if (err) { 
+        printk(KERN_ERR "dvbnet it950x_usb_rx_alloc_dev error\n");
+        return NULL;
+    }
+
+    err = it950x_usb_tx_alloc_dev(dev->itdev);
+    if (err) {
+        printk(KERN_ERR "dvbnet it950x_usb_rx_alloc_dev error\n");
+        return NULL;
+    }
 
     err = register_netdev(netdev);
     if (err) {
@@ -236,6 +354,8 @@ dvb_netdev* dvb_alloc_netdev(struct it950x_dev* itdev)
 void dvb_free_netdev(dvb_netdev* dev)
 {
     unregister_netdev(dev->netdev);
+    it950x_usb_tx_free_dev(dev->itdev);
+    it950x_usb_rx_free_dev(dev->itdev);
 }
 
 /*

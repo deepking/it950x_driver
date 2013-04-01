@@ -8,11 +8,11 @@
 #define _debug(fmt, args...)
 
 #if LINUX_VERSION_CODE > KERNEL_VERSION(2,6,35)
-#define tx_ioctl(dev, cmd, arg) it950x_usb_tx_unlocked_ioctl_dev(dev, cmd, arg)
-#define rx_ioctl(dev, cmd, arg) it950x_usb_rx_unlocked_ioctl_dev(dev, cmd, arg)
+#define tx_ioctl(dev, cmd, arg) it950x_usb_tx_unlocked_ioctl_dev(dev, cmd, (unsigned long) arg)
+#define rx_ioctl(dev, cmd, arg) it950x_usb_rx_unlocked_ioctl_dev(dev, cmd, (unsigned long) arg)
 #else
-#define tx_ioctl(dev, cmd, arg) it950x_usb_tx_ioctl_dev(dev, cmd, arg)
-#define rx_ioctl(dev, cmd, arg) it950x_usb_rx_ioctl_dev(dev, cmd, arg)
+#define tx_ioctl(dev, cmd, arg) it950x_usb_tx_ioctl_dev(dev, cmd, (unsigned long) arg)
+#define rx_ioctl(dev, cmd, arg) it950x_usb_rx_ioctl_dev(dev, cmd, (unsigned long) arg)
 #endif
 
 // --------------------------------------------------------------------------
@@ -45,7 +45,6 @@ Dword g_ITEAPI_TxSetChannelModulation(struct it950x_dev* dev, PSetModuleRequest 
 
 Dword g_ITEAPI_StartTransfer(struct it950x_dev* dev)
 {
-    printk(KERN_INFO "startTransfer %lu\n", IOCTL_ITE_DEMOD_STARTTRANSFER_TX);
     return tx_ioctl(dev, IOCTL_ITE_DEMOD_STARTTRANSFER_TX, NULL);
 }
 
@@ -68,58 +67,79 @@ Dword g_ITEAPI_TxSendTSData(struct it950x_dev* dev, Byte* pBuffer, Dword pdwBuff
 // RX
 // --------------------------------------------------------------------------
 
-Dword g_ITEAPI_StartCapture(struct it950x_dev* dev)
+Dword DTV_AcquireChannel(
+        struct it950x_dev* dev,
+        IN  Dword dwFrequency,                // Channel Frequency (KHz)
+        IN  Word  wBandwidth)                 // Channel Bandwidth (KHz)
+{
+    Dword dwError = Error_NO_ERROR;
+    int result;
+    AcquireChannelRequest request;
+
+    if (wBandwidth < 10)
+        wBandwidth *= 1000;
+
+    request.chip = 0;
+    request.frequency = dwFrequency;
+    request.bandwidth = wBandwidth;
+    result = rx_ioctl(dev, IOCTL_ITE_DEMOD_ACQUIRECHANNEL, (void *)&request);
+    dwError = request.error;
+
+    return (dwError);
+}
+
+Dword DTV_DisablePIDTbl(struct it950x_dev* dev)
+{
+    Dword dwError = Error_NO_ERROR;
+    int result;
+    ControlPidFilterRequest request;
+
+    request.chip = 0;
+    request.control = 0;
+    result = rx_ioctl(dev, IOCTL_ITE_DEMOD_CONTROLPIDFILTER, (void *)&request);
+    dwError = request.error;
+
+    return(dwError);
+}
+
+Dword DTV_IsLocked(struct it950x_dev* dev,
+        OUT Bool* pbLocked)
+{
+    Dword dwError = Error_NO_ERROR;
+    int result;
+    IsLockedRequest request;
+
+    request.chip = 0;
+    request.locked = (Bool *)pbLocked;
+    result = rx_ioctl(dev, IOCTL_ITE_DEMOD_ISLOCKED, (void *)&request);
+    dwError = request.error;
+
+    return (dwError);
+}
+
+Dword DTV_StartCapture(struct it950x_dev* dev)
 {
     return rx_ioctl(dev, IOCTL_ITE_DEMOD_STARTCAPTURE, NULL);
 }
 
-Dword g_ITEAPI_StopCapture(struct it950x_dev* dev)
+Dword DTV_StopCapture(struct it950x_dev* dev)
 {
     return rx_ioctl(dev, IOCTL_ITE_DEMOD_STOPCAPTURE, NULL);
 }
 
-/*
-static int GetDriverInfo(unsigned char handleNum)
+Dword DTV_GetData(
+        struct it950x_dev* dev,
+        OUT Byte* pBuffer,
+        IN OUT Dword* pdwBufferLength)
 {
-    unsigned int ChipType = 0;		
-    unsigned char Tx_NumOfDev = 0;
-    TxDemodDriverInfo driverInfo;
-    unsigned long dwError = ERR_NO_ERROR;
+    Dword dwError = Error_NO_ERROR;
+    GetDatagramRequest request;
 
-    if((dwError = g_ITEAPI_TxGetNumOfDevice(&Tx_NumOfDev)) == ERR_NO_ERROR)
-        _debug("%d Devices\n", Tx_NumOfDev);
-    else 
-        _debug("g_ITEAPI_TxGetNumOfDevice error\n");	
+    request.bufferLength = pdwBufferLength;
+    request.buffer = pBuffer;
 
-    if((dwError = g_ITEAPI_TxDeviceInit(handleNum)) == ERR_NO_ERROR)
-        _debug("g_ITEAPI_TxDeviceInit ok\n");
-    else 
-        _debug("g_ITEAPI_TxDeviceInit fail\n");
-
-    if((dwError = g_ITEAPI_TxLoadIQTableFromFile()) == ERR_NO_ERROR)
-        _debug("g_ITEAPI_TxLoadIQTableFromFile ok\n");
-    else
-        _debug("g_ITEAPI_TxLoadIQTableFromFile fail\n");		
-
-    if((dwError = g_ITEAPI_TxGetChipType(&ChipType)) == ERR_NO_ERROR)
-        _debug("g_ITE_TxGetChipType ok\n");
-    else
-        _debug("g_ITE_TxGetChipType fail\n");
-
-    if ((dwError = g_ITEAPI_GetDrvInfo(&driverInfo))) {
-        _debug("Get Driver Info failed 0x%lu!\n", dwError);
-    }
-    else {
-        _debug("g_ITEAPI_GetDrvInfo ok\n");		
-        _debug("DriverVerion  = %s\n", driverInfo.DriverVerion);
-        _debug("APIVerion     = %s\n", driverInfo.APIVerion);
-        _debug("FWVerionLink  = %s\n", driverInfo.FWVerionLink);
-        _debug("FWVerionOFDM  = %s\n", driverInfo.FWVerionOFDM);
-        _debug("Company       = %s\n", driverInfo.Company);
-        _debug("SupportHWInfo = %s\n", driverInfo.SupportHWInfo);
-        _debug("ChipType      = 0x%x", ChipType);
-    }
+    *pdwBufferLength = it950x_usb_rx_read_dev(dev, pBuffer, *pdwBufferLength);
+    dwError = request.error;
 
     return dwError;
 }
-*/

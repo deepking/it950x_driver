@@ -1210,7 +1210,7 @@ static int start_urb_transfer(struct it950x_dev *dev)
 	int i, nBytesRead = 0, ret = 0;
 	unsigned char buffer[CLEAN_HARDWARE_BUFFER_SIZE];
 
-	//deb_data("%s()\n", __func__);
+	deb_data("%s()\n", __func__);
 
 	if (dev->urb_streaming) {
 		deb_data("%s: iso xfer already running!\n", __func__);
@@ -1282,7 +1282,7 @@ static int start_urb_transfer(struct it950x_dev *dev)
 	dev->urb_streaming = 1;
 	ret = 0;
 
-	//deb_data("%s() end\n", __func__);
+	deb_data("%s() end\n", __func__);
 
 err:
 	return ret;
@@ -2096,6 +2096,7 @@ static int it950x_probe(struct usb_interface *intf, const struct usb_device_id *
 	}
 	
 	/* we can register the device now, as it is ready */
+	/*
 	retval = usb_register_dev(intf, &it950x_class);
 	if (retval) {
 		deb_data("Not able to get a minor for this device.");
@@ -2115,6 +2116,7 @@ static int it950x_probe(struct usb_interface *intf, const struct usb_device_id *
 	}
 	dev->tx_chip_minor = intf->minor;
 	deb_data("tx minor %d \n", dev->tx_chip_minor);
+	*/
 
 	/*Allocate TX TX_CMD urb*/
 	for (i = 0; i < URB_COUNT_TX_CMD; i++) {
@@ -2146,12 +2148,10 @@ static int it950x_probe(struct usb_interface *intf, const struct usb_device_id *
 
         // init dvb netdevice
         // 
-        dvb_netdev* dvbdev = dvb_alloc_netdev(dev);
-	if (dvbdev == NULL)
+        dev->dvbdev = dvb_alloc_netdev(dev);
+        if (dev->dvbdev == NULL)
 	    deb_data("alloc netdev fail\n");
 
-        dev->dvbdev = dvbdev;
-        
 	return retval;
 }
 
@@ -2246,11 +2246,13 @@ static void it950x_disconnect(struct usb_interface *intf)
 
 	/* give back our minor */
 	
+	/* 
 	intf->minor = dev->rx_chip_minor;
 	usb_deregister_dev(intf, &it950x_class);
 
 	intf->minor = dev->tx_chip_minor;
 	usb_deregister_dev(intf, &it950x_class_tx);
+	*/
 
 	mutex_unlock(&it950x_mutex);
 	//unlock_kernel();
