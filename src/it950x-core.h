@@ -1,5 +1,4 @@
 /**
- *
  * Copyright (c) 2013 ITE Corporation. All rights reserved. 
  *
  * Module Name:
@@ -39,7 +38,7 @@
 #include <linux/smp_lock.h>
 #endif
 
-#define   DRIVER_RELEASE_VERSION    "v13.02.07.1"
+#define   DRIVER_RELEASE_VERSION    "v13.03.04.1"
 
 /************** DTVCAM & AVSENDER **************/
 //#define   DTVCAM_POWER_CTRL
@@ -55,7 +54,7 @@
 #define URB_BUFSIZE_TX_CMD 188//65424//16356//32712
 #define URB_BUFSIZE_RX 188 * 348//32712//65424//16356//32712
 #define CLEAN_HARDWARE_BUFFER_SIZE 1000
-//***************** customization *****************
+//***************** Customization *****************
 //#define QuantaMID 1
 //#define EEEPC 1
 //***************** from compat.h *****************
@@ -69,9 +68,9 @@
 
 #define SLAVE_DEMOD_2WIREADDR  0x3A
 
-#define TS_PACKET_SIZE              	188
-#define TS_PACKET_COUNT_HI       348
-#define TS_PACKET_COUNT_FU       21
+#define TS_PACKET_SIZE         188
+#define TS_PACKET_COUNT_HI     348
+#define TS_PACKET_COUNT_FU     21
 
 //***************** from driver.h *****************//
 #define TS_FRAMES_HI 128
@@ -114,6 +113,15 @@ extern int dvb_usb_it950x_debug;
 #define deb_data(args...)
 #endif
 
+/* Ring Buffer Debug */
+#define RB_DEBUG 0
+#ifdef RB_DEBUG 
+#define deb_data(args...)   printk(KERN_NOTICE args)
+#else
+#define deb_data(args...)
+#endif
+
+
 //***************** from device.h *****************//
 
 /*AirHD no use, RC, after kernel 38 support*/
@@ -126,17 +134,14 @@ struct it950x_config {
 };
 
 typedef struct _TUNER_INFO {
-
     Bool bTunerInited;
     Bool bSettingFreq;
     BYTE TunerId;
     Bool bTunerOK;
-	
 	Bool bTunerLock;//AirHD
-	
     Tuner_struct MXL5005_Info;
-
 } TUNER_INFO, *PTUNER_INFO;
+
 typedef struct _FILTER_CONTEXT_HW {
     DWORD ulCurrentFrequency;
     WORD  ucCurrentBandWidth;  
@@ -149,13 +154,13 @@ typedef struct _FILTER_CONTEXT_HW {
     TUNER_INFO tunerinfo; 
     //SIGNAL_STATISTICS ss;
     //SIGNAL_RETRAIN sr;  
-    //DWORD   gdwOrigFCW;     //move from AF901x.cpp [global variable]
-    //BYTE    gucOrigUnplugTh; //move from AF901x.cpp [global variable]
+    //DWORD   gdwOrigFCW;        //move from AF901x.cpp [global variable]
+    //BYTE    gucOrigUnplugTh;   //move from AF901x.cpp [global variable]
     //BYTE    gucPreShiftIdx;    //move from AF901x.cpp [global variable]    
-   // PKSFILTERFACTORY  pFilterFactory;
+    // PKSFILTERFACTORY  pFilterFactory;
     int  bEnPID;
     //ULONG ulcPIDs;
-   // ULONG aulPIDs[32];
+    //ULONG aulPIDs[32];
     Bool bApOn;
     int bResetTs;
     Byte OvrFlwChk;
@@ -209,7 +214,6 @@ typedef struct _DEVICE_CONTEXT {
 	Handle handle_driver;
     
     Bool ForceWrite;
-    
     Byte chip_version;
     Bool bProprietaryIr;
     Byte bIrType;

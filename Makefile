@@ -3,6 +3,7 @@ EXTRA_CFLAGS = -DEXPORT_SYMTAB
 CURRENT = $(shell uname -r)
 KDIR = /lib/modules/$(CURRENT)/build
 PWD = $(shell pwd)
+MACHINE = $(shell uname -m)
 KDIR26	 := /lib/modules/$(CURRENT)/kernel/drivers/media
 DEST = /lib/modules/$(CURRENT)/kernel/$(MDIR)
 LMDIR26 := /lib/firmware
@@ -19,7 +20,11 @@ default:
 	@(cp api/*.* ./; cp src/*.* ./)
 	make -s -C $(KDIR) SUBDIRS=$(PWD) modules
 EXTRA_CFLAGS += -Wno-unused-value -Wno-unused-variable -Wno-unused-parameter \
-		-Wno-switch
+		-Wno-switch 
+
+ifeq "$(MACHINE)" "x86_64"
+EXTRA_CFLAGS += -Wno-enum-compare
+endif
 
 ifneq (,$(findstring 2.4.,$(CURRENT)))
 install: 

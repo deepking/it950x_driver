@@ -1943,10 +1943,10 @@ DWORD DL_ApCtrl (
 
 			PDC->fc[ucSlaveDemod].GraphBuilt = 0;
 
-			if (PDC->bTunerPowerOff != true) dwError = DRV_ApCtrl (PDC, ucSlaveDemod, bOn);
+			if (PDC->bTunerPowerOff != True) dwError = DRV_ApCtrl (PDC, ucSlaveDemod, bOn);
 
-			if (PDC->fc[0].GraphBuilt == 0 && PDC->fc[1].GraphBuilt == 0 && PDC->bTunerPowerOff == true)
-			dwError = DL_NIMSuspend(PDC, true);
+			if (PDC->fc[0].GraphBuilt == 0 && PDC->fc[1].GraphBuilt == 0 && PDC->bTunerPowerOff == True)
+			dwError = DL_NIMSuspend(PDC, True);
 		}
     }
     mutex_unlock(&mymutex);

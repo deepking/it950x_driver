@@ -1,12 +1,12 @@
-/*++
-Copyright (c) 2006-2013 ITEtech Corporation. All rights reserved.
-
-Module Name:
-    iocontrol.cpp
-
-Abstract:
-    Demodulator IOCTL Query and Set functions
---*/
+/**
+ * Copyright (c) 2006-2013 ITEtech Corporation. All rights reserved.
+ *
+ * Module Name:
+ *     iocontrol.cpp
+ *
+ * Abstract:
+ *     Demodulator IOCTL Query and Set functions
+ */
 
 
 #include "it950x-core.h"
