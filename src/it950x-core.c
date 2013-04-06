@@ -1173,49 +1173,8 @@ try:
 		goto try;
 	}	
 	deb_data("open RX subminor: %d\n", subminor);		
-	
-	/* Ring buffer alloc & chip init */
-	spin_lock_init(&dev->RxRBKeylock);
-	dev->rx_urb_streaming = 0;
-	dev->dwRxReadRemaingBufferSize = 0;
-	dev->dwRxTolBufferSize = URB_BUFSIZE_RX * URB_COUNT_RX;
-	dev->rx_urb_index = 0;
-	dev->rx_first_urb_reset = 0;
-	
-	atomic_set(&dev->rx_urb_counter, URB_COUNT_RX);
-	dev->pRxRingBuffer = (Byte*)__get_free_pages(GFP_KERNEL, get_order(dev->dwRxTolBufferSize));
 
-	/*Allocate RX urb*/	
-	for (urb_index = 0; urb_index < URB_COUNT_RX; urb_index++) {
-		dev->rx_urbs[urb_index] = usb_alloc_urb(0, GFP_KERNEL);
-		if (!dev->rx_urbs[urb_index])
-			retval = -ENOMEM;
-			
-		dev->rx_urbs[urb_index]->transfer_buffer = dev->pRxRingBuffer + (URB_BUFSIZE_RX * urb_index);
-
-		if(!dev->rx_urbs[urb_index]->transfer_buffer){
-			usb_free_urb(dev->rx_urbs[urb_index]);
-			dev->rx_urbs[urb_index] = NULL;
-			retval = -ENOMEM;
-			goto exit;
-		}
-
-		dev->rx_urb_context[urb_index].index = urb_index;
-		dev->rx_urbstatus[urb_index] = 0;
-		dev->rx_urb_context[urb_index].dev = dev;
-		dev->rx_urbs[urb_index]->status = -EINPROGRESS;
-		
-		usb_fill_bulk_urb(dev->rx_urbs[urb_index],
-				  dev->usbdev,
-				  usb_rcvbulkpipe(dev->usbdev, 0x85),
-				  dev->rx_urbs[urb_index]->transfer_buffer,
-				  URB_BUFSIZE_RX,
-				  rx_urb_completion,
-				  &dev->rx_urb_context[urb_index]);
-						  
-			dev->rx_urbs[urb_index]->transfer_flags = 0;
-
-	}	
+	retval = it950x_usb_rx_alloc_dev(dev);
 	
 	/* increment our usage count for the device */
 	//kref_get(&dev->kref);
@@ -1223,21 +1182,6 @@ try:
 	/* save our object in the file's private structure */
 	dev->file = file;
 	file->private_data = dev;
-	
-#if !(defined(DTVCAM_POWER_CTRL) && defined(AVSENDER_POWER_CTRL))	
-	if(atomic_read(&dev->rx_pw_on) == 0) {
-		if(atomic_read(&dev->tx_pw_on) == 0) {
-			error = DL_ApPwCtrl(&dev, 0, 1);
-			error = DL_ApPwCtrl(&dev->DC, 1, 1);
-			atomic_set(&dev->tx_pw_on, 1);	
-			atomic_set(&dev->rx_pw_on, 1);				
-		} else {		
-			error = DL_ApPwCtrl(&dev->DC, 1, 1);
-			atomic_set(&dev->rx_pw_on, 1);	
-		}
-	}	
-#endif	
-	atomic_add(1, &dev->g_AP_use_rx);	
 	
 exit:
 	return retval;
@@ -1250,7 +1194,6 @@ static int it950x_usb_tx_open(struct inode *inode, struct file *file)
 	int mainsubminor, subminor;
 	int retval = 0;
 	int error;
-	int order, order_cmd;
 
 	deb_data("it950x_usb_tx_open function\n");
 	
@@ -1286,81 +1229,11 @@ try:
 	}	
 	deb_data("open TX subminor: %d\n", subminor);			
 	
-	atomic_set(&dev->tx_urb_counter, URB_COUNT_TX);
-	atomic_set(&dev->urb_counter_low_brate, URB_COUNT_TX_LOW_BRATE);
-
-#if URB_TEST		
-	do_gettimeofday(&start);	
-#endif
-
-	/*kzalloc will limit by Embedded system*/
-#if 0
-	dev->dwTxWriteTolBufferSize = URB_BUFSIZE_TX * URB_COUNT_TX;
-	dev->pTxRingBuffer = kzalloc(dev->dwTxWriteTolBufferSize + 8, GFP_KERNEL);
-	if (dev->pTxRingBuffer) {
-		dev->pWriteFrameBuffer = dev->pTxRingBuffer + 8;
-		dev->pTxCurrBuffPointAddr = dev->pTxRingBuffer;
-		dev->pTxWriteBuffPointAddr = dev->pTxRingBuffer + 4;
-		dev->dwTxRemaingBufferSize = dev->dwTxWriteTolBufferSize;
-		dev->tx_urb_index = 0;
-		//dev->urb_use_count = URB_COUNT_TX;
-	}
-#endif
-
-	/*Write Ring buffer alloc*/
-	dev->dwTxWriteTolBufferSize = URB_BUFSIZE_TX * URB_COUNT_TX;
-	order = get_order(dev->dwTxWriteTolBufferSize);
-	dev->pTxRingBuffer = (Byte*)__get_free_pages(GFP_KERNEL, order);
-	if (dev->pTxRingBuffer) {
-//		dev->pWriteFrameBuffer = dev->pTxRingBuffer + 8;
-		dev->TxCurrBuffPointAddr = 0;
-		dev->TxWriteBuffPointAddr = 0;
-		dev->dwTxRemaingBufferSize = dev->dwTxWriteTolBufferSize;
-		dev->tx_urb_index = 0;
-		//dev->urb_use_count = URB_COUNT_TX;
-	}
-	
-	/*Write cmd Ring buffer alloc*/
-	dev->dwTxWriteTolBufferSize_cmd = URB_BUFSIZE_TX_CMD * URB_COUNT_TX_CMD;
-	order_cmd = get_order(dev->dwTxWriteTolBufferSize_cmd + 8);
-	dev->pTxRingBuffer_cmd = (Byte*)__get_free_pages(GFP_KERNEL, order_cmd);
-	if (dev->pTxRingBuffer_cmd) {
-		dev->pWriteFrameBuffer_cmd = dev->pTxRingBuffer_cmd + 8;
-		dev->pTxCurrBuffPointAddr_cmd = (Dword*)dev->pTxRingBuffer_cmd;
-		dev->pTxWriteBuffPointAddr_cmd = (Dword*)(dev->pTxRingBuffer_cmd + 4);
-		dev->dwTxRemaingBufferSize_cmd = dev->dwTxWriteTolBufferSize_cmd;
-		dev->tx_urb_index_cmd = 0;
-		//dev->urb_use_count_cmd = URB_COUNT_TX_CMD;
-	}
-	
-	/*Write low bitrate Ring buffer alloc*/
-	dev->dwTxWriteTolBufferSize_low_brate = URB_BUFSIZE_TX_LOW_BRATE * URB_COUNT_TX_LOW_BRATE;
-	order = get_order(dev->dwTxWriteTolBufferSize_low_brate + 8);
-	dev->pTxRingBuffer_low_brate = (Byte*)__get_free_pages(GFP_KERNEL, order);
-	if (dev->pTxRingBuffer_low_brate) {
-		dev->pWriteFrameBuffer_low_brate = dev->pTxRingBuffer_low_brate + 8;
-		dev->pTxCurrBuffPointAddr_low_brate = (Dword*)dev->pTxRingBuffer_low_brate;
-		dev->pTxWriteBuffPointAddr_low_brate = (Dword*)(dev->pTxRingBuffer_low_brate + 4);
-		dev->dwTxRemaingBufferSize_low_brate = dev->dwTxWriteTolBufferSize_low_brate;
-		dev->tx_urb_index_low_brate = 0;
-		dev->tx_urb_use_count_low_brate = URB_COUNT_TX_LOW_BRATE;
-	}
-		
-	/* increment our usage count for the device */
-	//kref_get(&dev->kref);
+	retval = it950x_usb_tx_alloc_dev(dev);
 	
 	/* save our object in the file's private structure */
 	dev->tx_file = file;
 	file->private_data = dev;
-
-#if !(defined(DTVCAM_POWER_CTRL) && defined(AVSENDER_POWER_CTRL))
-	if(atomic_read(&dev->tx_pw_on) == 0) {
-		error = DL_ApPwCtrl(&dev->DC, 0, 1);
-		atomic_set(&dev->tx_pw_on, 1);	
-	}
-#endif		
-
-	atomic_add(1, &dev->g_AP_use_tx);
 exit:
 	return retval;
 }
@@ -1368,114 +1241,22 @@ exit:
 static int it950x_usb_release(struct inode *inode, struct file *file)
 {
 	struct it950x_dev *dev;
-	int error, i;
-	int order;
-	//deb_data("it950x_usb_release function\n");
 	dev = (struct it950x_dev *)file->private_data;
-	if (dev == NULL) {
-		deb_data("dev is NULL\n");
-		return -ENODEV;
-	}
-	
-	if(atomic_read(&dev->g_AP_use_rx) == 1) {
-		rx_stop_urb_transfer(dev);
 
-/*		if(dev->g_AP_use == 1) {
-			dev->DevicePower = 0;
-			error = DL_ApCtrl(&dev->DC, 0, 0);
-			error = DL_ApCtrl(&dev->DC, 1, 0);
-		}
-		dev->g_AP_use--;*/
-		
-		dev = (struct it950x_dev *)file->private_data;
-		if (dev == NULL)
-			return -ENODEV;
-
-		/* decrement the count on our device */
-		//kref_put(&dev->kref, afa_delete);
-
-		if (dev->pRxRingBuffer)
-			free_pages((long unsigned int)dev->pRxRingBuffer, get_order(dev->dwRxTolBufferSize));
-	
-
-		for (i = 0; i < URB_COUNT_RX; i++) {   /* if urb doesn't call back, kill it. */
-			if(dev->rx_urbstatus[i] == 1){
-				usb_kill_urb(dev->rx_urbs[i]);
-			}
-		}	
-		rx_free_urbs(dev);	
-
-#if !(defined(DTVCAM_POWER_CTRL) && defined(AVSENDER_POWER_CTRL))
-		if(atomic_read(&dev->rx_pw_on) == 1) {
-			if(atomic_read(&dev->g_AP_use_tx) == 0) {    // normal.
-				error = DL_ApPwCtrl(&dev->DC, 1, 0);
-				error = DL_ApPwCtrl(&dev->DC, 0, 0);
-				atomic_set(&dev->rx_pw_on, 0);	
-				atomic_set(&dev->tx_pw_on, 0);				
-			} else {		                                 // if tx in used. just off rx.
-				error = DL_ApPwCtrl(&dev->DC, 1, 0);
-				atomic_set(&dev->rx_pw_on, 0);	
-			}
-		}	
-#endif		
-	}
-	atomic_sub(1, &dev->g_AP_use_rx);
-	return 0;
+	return it950x_usb_rx_free_dev(dev);
 }
 
 static int it950x_usb_tx_release(struct inode *inode, struct file *file)
 {
 	struct it950x_dev *dev;
-	int error;
-	int order;
-	//deb_data("it950x_usb_release function\n");	
+
 	dev = (struct it950x_dev *)file->private_data;
 	if (dev == NULL) {
 		deb_data("dev is NULL\n");
 		return -ENODEV;
 	}	
 
-	if(	atomic_read(&dev->g_AP_use_tx) == 1) {
-		
-		dev = (struct it950x_dev *)file->private_data;
-		if (dev == NULL)
-			return -ENODEV;
-
-		tx_stop_urb_transfer(dev);
-
-		/* decrement the count on our device */
-		//kref_put(&dev->kref, afa_delete);
-		
-		if (dev->pTxRingBuffer){
-			order = get_order(dev->dwTxWriteTolBufferSize);
-			free_pages((long unsigned int)dev->pTxRingBuffer, order);
-		}
-
-		if (dev->pTxRingBuffer_cmd){
-			order = get_order(dev->dwTxWriteTolBufferSize_cmd + 8);
-			free_pages((long unsigned int)dev->pTxRingBuffer_cmd, order);
-		}
-
-		if (dev->pTxRingBuffer_low_brate){
-			order = get_order(dev->dwTxWriteTolBufferSize_low_brate + 8);
-			free_pages((long unsigned int)dev->pTxRingBuffer_low_brate, order);
-		}			
-		
-#if !(defined(DTVCAM_POWER_CTRL) && defined(AVSENDER_POWER_CTRL))		
-		if(atomic_read(&dev->tx_pw_on) == 1) {
-			if(atomic_read(&dev->g_AP_use_rx) == 0) {   // RX not used, suspend tx.
-				error = DL_ApPwCtrl(&dev->DC, 0, 0);
-				atomic_set(&dev->tx_pw_on, 0);	
-			} else {
-				deb_data("RX lock TX_PowerSaving\n");
-			}
-		}
-#endif		
-
-	}
-	atomic_sub(1, &dev->g_AP_use_tx);
-
-	return 0;
+	return it950x_usb_tx_free_dev(dev);
 }
 
 #if LINUX_VERSION_CODE <= KERNEL_VERSION(2,6,35)
@@ -1483,55 +1264,9 @@ static int it950x_usb_ioctl(struct inode *inode, struct file *file,
 	unsigned int cmd,  unsigned long parg)
 {
 	struct it950x_dev *dev;
-	Byte temp0 = 0, temp1 = 1;
-	Dword status;
-	deb_data("it9507_usb_ioctl function\n");
-  
 	dev = (struct it950x_dev *)file->private_data;
-	if (dev == NULL) {
-		deb_data("dev is NULL\n");
-		return -ENODEV;
-	}
 
-	/*
-	* extract the type and number bitfields, and don't decode
-	* wrong cmds: return ENOTTY (inappropriate ioctl) before access_ok()
-	*/
-
-	//if (_IOC_TYPE(cmd) != AFA_IOC_MAGIC) return -ENOTTY;
-	//if (_IOC_NR(cmd) > AFA_IOC_MAXNR) return -ENOTTY;
-
-	switch (cmd)
-	{	
-		case IOCTL_ITE_DEMOD_STARTCAPTURE:
-			rx_start_urb_transfer(dev);
-			return 0;		
-		
-		case IOCTL_ITE_DEMOD_STOPCAPTURE:
-			rx_stop_urb_transfer(dev);
-			return 0;
-		
-		//clean 12 bytes garbage through 9507(TX)	
-		case IOCTL_ITE_DEMOD_ADDPIDAT:
-			status = IT9507_writeRegisters ((Modulator*)&dev->DC.modulator, Processor_OFDM, 0xF9A4, 1, &temp1);
-			if(status)
-			deb_data("DTV_WriteRegOFDM() return error!\n");
-
-			status = IT9507_writeRegisters ((Modulator*)&dev->DC.modulator, Processor_OFDM, 0xF9CC, 1, &temp0);
-			if(status)
-			deb_data("DTV_WriteRegOFDM() return error!\n");
-
-			status = IT9507_writeRegisters ((Modulator*)&dev->DC.modulator, Processor_OFDM, 0xF9A4, 1, &temp0);
-			if(status)
-			deb_data("DTV_WriteRegOFDM() return error!\n");
-
-			status = IT9507_writeRegisters ((Modulator*)&dev->DC.modulator, Processor_OFDM, 0xF9CC, 1, &temp1);
-			if(status)
-			deb_data("DTV_WriteRegOFDM() return error!\n");
-
-			break;
-	}
-	return DL_DemodIOCTLFun((void *)&dev->DC.demodulator, (DWORD)cmd, parg);
+	return it950x_usb_rx_ioctl_dev(dev, cmd, parg);
 }
 #endif
 
@@ -1565,42 +1300,7 @@ static int it950x_usb_tx_ioctl(struct inode *inode, struct file *file,
 		return -ENODEV;
 	}
 
-	/*
-	* extract the type and number bitfields, and don't decode
-	* wrong cmds: return ENOTTY (inappropriate ioctl) before access_ok()
-	*/
-
-	//if (_IOC_TYPE(cmd) != AFA_IOC_MAGIC) return -ENOTTY;
-	//if (_IOC_NR(cmd) > AFA_IOC_MAXNR) return -ENOTTY;
-    
-	switch (cmd)
-	{
-		case IOCTL_ITE_DEMOD_STARTTRANSFER_TX:
-			tx_start_urb_transfer(dev);
-			return 0;
-					
-		case IOCTL_ITE_DEMOD_STOPTRANSFER_TX:
-			tx_stop_urb_transfer(dev);
-			return 0;
-			
-		case IOCTL_ITE_DEMOD_STARTTRANSFER_CMD_TX:
-			tx_start_urb_transfer_cmd(dev);
-			return 0;
-			
-		case IOCTL_ITE_DEMOD_STOPTRANSFER_CMD_TX:
-			tx_stop_urb_transfer_cmd(dev);
-			return 0;
-		
-		case IOCTL_ITE_DEMOD_WRITECMD_TX:
-			pRequest = (PCmdRequest) parg;
-			Tx_RingBuffer_cmd(dev, pRequest->cmd, pRequest->len);
-			return 0;		
-			
-		case IOCTL_ITE_DEMOD_SETLOWBRATETRANS_TX:
-			SetLowBitRateTransfer(dev, (void*)parg);
-			return 0;
-	}
-	return DL_DemodIOCTLFun((void *)&dev->DC.modulator, (DWORD)cmd, parg);
+	return it950x_usb_tx_ioctl_dev(dev);
 }
 #endif
 
@@ -1610,37 +1310,10 @@ long it950x_usb_unlocked_ioctl(
 	unsigned int cmd,
 	unsigned long parg)
 {
-
 	struct it950x_dev *dev;
-	
-	//deb_data("it950x_usb_ioctl function\n");
-
 	dev = (struct it950x_dev *)file->private_data;
-	if (dev == NULL) {
-		deb_data("dev is NULL\n");
-		return -ENODEV;
-	}
 
-	/*
-	* extract the type and number bitfields, and don't decode
-	* wrong cmds: return ENOTTY (inappropriate ioctl) before access_ok()
-	*/
-
-	//if (_IOC_TYPE(cmd) != AFA_IOC_MAGIC) return -ENOTTY;
-	//if (_IOC_NR(cmd) > AFA_IOC_MAXNR) return -ENOTTY;
-
-	switch (cmd)
-	{	
-		case IOCTL_ITE_DEMOD_STARTCAPTURE:
-			rx_start_urb_transfer(dev);
-			return 0;
-
-		case IOCTL_ITE_DEMOD_STOPCAPTURE:
-			rx_stop_urb_transfer(dev);
-			return 0;
-	}
-
-	return DL_DemodIOCTLFun((void *)&dev->DC.demodulator, (DWORD)cmd, parg);
+	return it950x_usb_rx_unlocked_ioctl_dev(dev, cmd, parg);
 }
 #endif
 
@@ -1660,42 +1333,7 @@ long it950x_usb_tx_unlocked_ioctl(
 		return -ENODEV;
 	}
 
-	/*
-	* extract the type and number bitfields, and don't decode
-	* wrong cmds: return ENOTTY (inappropriate ioctl) before access_ok()
-	*/
-
-	//if (_IOC_TYPE(cmd) != AFA_IOC_MAGIC) return -ENOTTY;
-	//if (_IOC_NR(cmd) > AFA_IOC_MAXNR) return -ENOTTY;
-
-	switch (cmd)
-	{
-		case IOCTL_ITE_DEMOD_STARTTRANSFER_TX:
-			tx_start_urb_transfer(dev);
-			return 0;
-					
-		case IOCTL_ITE_DEMOD_STOPTRANSFER_TX:
-			tx_stop_urb_transfer(dev);
-			return 0;
-			
-		case IOCTL_ITE_DEMOD_STARTTRANSFER_CMD_TX:
-			tx_start_urb_transfer_cmd(dev);
-			return 0;
-			
-		case IOCTL_ITE_DEMOD_STOPTRANSFER_CMD_TX:
-			tx_stop_urb_transfer_cmd(dev);
-			return 0;
-		
-		case IOCTL_ITE_DEMOD_WRITECMD_TX:
-			pRequest = (PCmdRequest) parg;
-			Tx_RingBuffer_cmd(dev, pRequest->cmd, pRequest->len);
-			return 0;		
-			
-		case IOCTL_ITE_DEMOD_SETLOWBRATETRANS_TX:
-			SetLowBitRateTransfer(dev, (void*)parg);
-			return 0;
-	}
-	return DL_DemodIOCTLFun((void *)&dev->DC.modulator, (DWORD)cmd, parg);
+        return it950x_usb_tx_unlocked_ioctl_dev(dev, cmd, parg);
 }
 #endif
 
@@ -1707,38 +1345,8 @@ static ssize_t it950x_read(
 	loff_t *ppos)
 {
 	struct it950x_dev *dev = (struct it950x_dev *)file->private_data;
-	Dword Len = count;
 
-	if (dev == NULL) 
-		return -ENODEV;
-
-	Rx_RingBuffer(dev, buf, &Len);
-	//deb_data("ReadRingBuffer - %d\n", Len);
-
-	return Len;
-
-	/*AirHD*/
-#if 0
-	//udev = (struct usb_device *)file->private_data;
-	//dev = (DEVICE_CONTEXT *)dev_get_drvdata(&udev->dev);
-
-		ret = usb_bulk_msg(usb_get_dev(dev->DC->modulator.userData),
-				usb_rcvbulkpipe(usb_get_dev(dev->DC->modulator.userData), 0x85), //dev->Demodulator.driver
-				buffer,
-				256,
-				&nBytesRead,
-				100000);	
-
-		if (ret) deb_data("--------Usb2_readControlBus fail : 0x%08lx\n", ret);
-	
-		copy_to_user(buf, buffer, 256);
-
-		for(i = 0; i < 256; i++)
-			deb_data("---------Read data buffer[%d] 0x%x\n", i, buf[i]);
-
-		return 0;
-#endif
-
+        return it950x_usb_rx_read_dev(dev, buf, count);
 }
 
 static ssize_t it950x_tx_write(
@@ -2064,6 +1672,456 @@ static void __exit it950x_module_exit(void)
 {
 	deb_data("usb_it950x Module is unloaded!\n");
 	usb_deregister(&it950x_driver);
+}
+
+int it950x_usb_rx_alloc_dev(struct it950x_dev *dev)
+{
+    int retval = 0;
+    int error = 0;
+    int urb_index;
+
+    if (!dev) {
+        deb_data("ERROR: NULL device\n");
+        retval = -ENODEV;
+        goto exit;
+    }
+
+    /* Ring buffer alloc & chip init */
+    spin_lock_init(&dev->RxRBKeylock);
+    dev->rx_urb_streaming = 0;
+    dev->dwRxReadRemaingBufferSize = 0;
+    dev->dwRxTolBufferSize = URB_BUFSIZE_RX * URB_COUNT_RX;
+    dev->rx_urb_index = 0;
+    dev->rx_first_urb_reset = 0;
+
+    atomic_set(&dev->rx_urb_counter, URB_COUNT_RX);
+    dev->pRxRingBuffer = (Byte*)__get_free_pages(GFP_KERNEL, get_order(dev->dwRxTolBufferSize));
+
+    /*Allocate RX urb*/	
+    for (urb_index = 0; urb_index < URB_COUNT_RX; urb_index++) {
+        dev->rx_urbs[urb_index] = usb_alloc_urb(0, GFP_KERNEL);
+        if (!dev->rx_urbs[urb_index])
+            retval = -ENOMEM;
+
+        dev->rx_urbs[urb_index]->transfer_buffer = dev->pRxRingBuffer + (URB_BUFSIZE_RX * urb_index);
+
+        if(!dev->rx_urbs[urb_index]->transfer_buffer){
+            usb_free_urb(dev->rx_urbs[urb_index]);
+            dev->rx_urbs[urb_index] = NULL;
+            retval = -ENOMEM;
+            goto exit;
+        }
+
+        dev->rx_urb_context[urb_index].index = urb_index;
+        dev->rx_urbstatus[urb_index] = 0;
+        dev->rx_urb_context[urb_index].dev = dev;
+        dev->rx_urbs[urb_index]->status = -EINPROGRESS;
+
+        usb_fill_bulk_urb(dev->rx_urbs[urb_index],
+                dev->usbdev,
+                usb_rcvbulkpipe(dev->usbdev, 0x85),
+                dev->rx_urbs[urb_index]->transfer_buffer,
+                URB_BUFSIZE_RX,
+                rx_urb_completion,
+                &dev->rx_urb_context[urb_index]);
+
+        dev->rx_urbs[urb_index]->transfer_flags = 0;
+    }	
+
+#if !(defined(DTVCAM_POWER_CTRL) && defined(AVSENDER_POWER_CTRL))	
+    if(atomic_read(&dev->rx_pw_on) == 0) {
+        if(atomic_read(&dev->tx_pw_on) == 0) {
+            error = DL_ApPwCtrl(&dev, 0, 1);
+            error = DL_ApPwCtrl(&dev->DC, 1, 1);
+            atomic_set(&dev->tx_pw_on, 1);	
+            atomic_set(&dev->rx_pw_on, 1);				
+        } else {		
+            error = DL_ApPwCtrl(&dev->DC, 1, 1);
+            atomic_set(&dev->rx_pw_on, 1);	
+        }
+    }	
+#endif	
+    atomic_add(1, &dev->g_AP_use_rx);	
+
+exit:
+    return retval;
+}
+
+int it950x_usb_rx_free_dev(struct it950x_dev *dev)
+{
+	int error = 0;
+	int i;
+
+	if (dev == NULL) {
+		deb_data("dev is NULL\n");
+		return -ENODEV;
+	}
+	
+	if(atomic_read(&dev->g_AP_use_rx) == 1) {
+		rx_stop_urb_transfer(dev);
+
+/*		if(dev->g_AP_use == 1) {
+			dev->DevicePower = 0;
+			error = DL_ApCtrl(&dev->DC, 0, 0);
+			error = DL_ApCtrl(&dev->DC, 1, 0);
+		}
+		dev->g_AP_use--;*/
+		
+		if (dev->pRxRingBuffer)
+			free_pages((long unsigned int)dev->pRxRingBuffer, get_order(dev->dwRxTolBufferSize));
+	
+
+		for (i = 0; i < URB_COUNT_RX; i++) {   /* if urb doesn't call back, kill it. */
+			if(dev->rx_urbstatus[i] == 1){
+				usb_kill_urb(dev->rx_urbs[i]);
+			}
+		}	
+		rx_free_urbs(dev);	
+
+#if !(defined(DTVCAM_POWER_CTRL) && defined(AVSENDER_POWER_CTRL))
+		if(atomic_read(&dev->rx_pw_on) == 1) {
+			if(atomic_read(&dev->g_AP_use_tx) == 0) {    // normal.
+				error = DL_ApPwCtrl(&dev->DC, 1, 0);
+				error = DL_ApPwCtrl(&dev->DC, 0, 0);
+				atomic_set(&dev->rx_pw_on, 0);	
+				atomic_set(&dev->tx_pw_on, 0);				
+			} else {		                                 // if tx in used. just off rx.
+				error = DL_ApPwCtrl(&dev->DC, 1, 0);
+				atomic_set(&dev->rx_pw_on, 0);	
+			}
+		}	
+#endif		
+	}
+	atomic_sub(1, &dev->g_AP_use_rx);
+	return 0;
+}
+
+#if LINUX_VERSION_CODE <= KERNEL_VERSION(2,6,35)
+int it950x_usb_rx_ioctl_dev(struct it950x_dev *dev, unsigned int cmd,  unsigned long parg)
+{
+    Byte temp0 = 0
+        Byte temp1 = 1;
+    Dword status;
+
+    if (dev == NULL) {
+        deb_data("dev is NULL\n");
+        return -ENODEV;
+    }
+
+    switch (cmd)
+    {	
+        case IOCTL_ITE_DEMOD_STARTCAPTURE:
+            rx_start_urb_transfer(dev);
+            return 0;		
+
+        case IOCTL_ITE_DEMOD_STOPCAPTURE:
+            rx_stop_urb_transfer(dev);
+            return 0;
+
+            //clean 12 bytes garbage through 9507(TX)	
+        case IOCTL_ITE_DEMOD_ADDPIDAT:
+            status = IT9507_writeRegisters ((Modulator*)&dev->DC.modulator, Processor_OFDM, 0xF9A4, 1, &temp1);
+            if(status)
+                deb_data("DTV_WriteRegOFDM() return error!\n");
+
+            status = IT9507_writeRegisters ((Modulator*)&dev->DC.modulator, Processor_OFDM, 0xF9CC, 1, &temp0);
+            if(status)
+                deb_data("DTV_WriteRegOFDM() return error!\n");
+
+            status = IT9507_writeRegisters ((Modulator*)&dev->DC.modulator, Processor_OFDM, 0xF9A4, 1, &temp0);
+            if(status)
+                deb_data("DTV_WriteRegOFDM() return error!\n");
+
+            status = IT9507_writeRegisters ((Modulator*)&dev->DC.modulator, Processor_OFDM, 0xF9CC, 1, &temp1);
+            if(status)
+                deb_data("DTV_WriteRegOFDM() return error!\n");
+
+            break;
+    }
+    return DL_DemodIOCTLFun((void *)&dev->DC.demodulator, (DWORD)cmd, parg);
+}
+#endif
+
+#if LINUX_VERSION_CODE > KERNEL_VERSION(2,6,35)
+long it950x_usb_rx_unlocked_ioctl_dev(struct it950x_dev *dev, unsigned int cmd, unsigned long parg)
+{
+    if (dev == NULL) {
+        deb_data("dev is NULL\n");
+        return -ENODEV;
+    }
+
+    switch (cmd)
+    {	
+        case IOCTL_ITE_DEMOD_STARTCAPTURE:
+            rx_start_urb_transfer(dev);
+            return 0;
+
+        case IOCTL_ITE_DEMOD_STOPCAPTURE:
+            rx_stop_urb_transfer(dev);
+            return 0;
+    }
+
+    return DL_DemodIOCTLFun((void *)&dev->DC.demodulator, (DWORD)cmd, parg);
+}
+#endif
+
+ssize_t it950x_usb_rx_read_dev(
+        struct it950x_dev *dev,
+	char __user *buf,
+	size_t count)
+{
+    Dword Len = count;
+
+    if (dev == NULL) 
+        return -ENODEV;
+
+    Rx_RingBuffer(dev, buf, &Len);
+    //deb_data("ReadRingBuffer - %d\n", Len);
+
+    return Len;
+}
+
+int it950x_usb_tx_alloc_dev(struct it950x_dev *dev)
+{
+    int retval = 0;
+    int order;
+    int order_cmd;
+    int error;
+
+    if (!dev) {
+        deb_data("usb_get_intfdata fail!\n");
+        retval = -ENODEV;
+        goto exit;
+    }
+
+    atomic_set(&dev->tx_urb_counter, URB_COUNT_TX);
+    atomic_set(&dev->urb_counter_low_brate, URB_COUNT_TX_LOW_BRATE);
+
+#if URB_TEST		
+    do_gettimeofday(&start);	
+#endif
+
+    /*kzalloc will limit by Embedded system*/
+#if 0
+    dev->dwTxWriteTolBufferSize = URB_BUFSIZE_TX * URB_COUNT_TX;
+    dev->pTxRingBuffer = kzalloc(dev->dwTxWriteTolBufferSize + 8, GFP_KERNEL);
+    if (dev->pTxRingBuffer) {
+        dev->pWriteFrameBuffer = dev->pTxRingBuffer + 8;
+        dev->pTxCurrBuffPointAddr = dev->pTxRingBuffer;
+        dev->pTxWriteBuffPointAddr = dev->pTxRingBuffer + 4;
+        dev->dwTxRemaingBufferSize = dev->dwTxWriteTolBufferSize;
+        dev->tx_urb_index = 0;
+        //dev->urb_use_count = URB_COUNT_TX;
+    }
+#endif
+
+    /*Write Ring buffer alloc*/
+    dev->dwTxWriteTolBufferSize = URB_BUFSIZE_TX * URB_COUNT_TX;
+    order = get_order(dev->dwTxWriteTolBufferSize);
+    dev->pTxRingBuffer = (Byte*)__get_free_pages(GFP_KERNEL, order);
+    if (dev->pTxRingBuffer) {
+        //		dev->pWriteFrameBuffer = dev->pTxRingBuffer + 8;
+        dev->TxCurrBuffPointAddr = 0;
+        dev->TxWriteBuffPointAddr = 0;
+        dev->dwTxRemaingBufferSize = dev->dwTxWriteTolBufferSize;
+        dev->tx_urb_index = 0;
+        //dev->urb_use_count = URB_COUNT_TX;
+    }
+
+    /*Write cmd Ring buffer alloc*/
+    dev->dwTxWriteTolBufferSize_cmd = URB_BUFSIZE_TX_CMD * URB_COUNT_TX_CMD;
+    order_cmd = get_order(dev->dwTxWriteTolBufferSize_cmd + 8);
+    dev->pTxRingBuffer_cmd = (Byte*)__get_free_pages(GFP_KERNEL, order_cmd);
+    if (dev->pTxRingBuffer_cmd) {
+        dev->pWriteFrameBuffer_cmd = dev->pTxRingBuffer_cmd + 8;
+        dev->pTxCurrBuffPointAddr_cmd = (Dword*)dev->pTxRingBuffer_cmd;
+        dev->pTxWriteBuffPointAddr_cmd = (Dword*)(dev->pTxRingBuffer_cmd + 4);
+        dev->dwTxRemaingBufferSize_cmd = dev->dwTxWriteTolBufferSize_cmd;
+        dev->tx_urb_index_cmd = 0;
+        //dev->urb_use_count_cmd = URB_COUNT_TX_CMD;
+    }
+
+    /*Write low bitrate Ring buffer alloc*/
+    dev->dwTxWriteTolBufferSize_low_brate = URB_BUFSIZE_TX_LOW_BRATE * URB_COUNT_TX_LOW_BRATE;
+    order = get_order(dev->dwTxWriteTolBufferSize_low_brate + 8);
+    dev->pTxRingBuffer_low_brate = (Byte*)__get_free_pages(GFP_KERNEL, order);
+    if (dev->pTxRingBuffer_low_brate) {
+        dev->pWriteFrameBuffer_low_brate = dev->pTxRingBuffer_low_brate + 8;
+        dev->pTxCurrBuffPointAddr_low_brate = (Dword*)dev->pTxRingBuffer_low_brate;
+        dev->pTxWriteBuffPointAddr_low_brate = (Dword*)(dev->pTxRingBuffer_low_brate + 4);
+        dev->dwTxRemaingBufferSize_low_brate = dev->dwTxWriteTolBufferSize_low_brate;
+        dev->tx_urb_index_low_brate = 0;
+        dev->tx_urb_use_count_low_brate = URB_COUNT_TX_LOW_BRATE;
+    }
+
+#if !(defined(DTVCAM_POWER_CTRL) && defined(AVSENDER_POWER_CTRL))
+    if(atomic_read(&dev->tx_pw_on) == 0) {
+        error = DL_ApPwCtrl(&dev->DC, 0, 1);
+        atomic_set(&dev->tx_pw_on, 1);	
+    }
+#endif		
+
+    atomic_add(1, &dev->g_AP_use_tx);
+exit:
+    return retval;
+}
+
+int it950x_usb_tx_free_dev(struct it950x_dev *dev)
+{
+    int error;
+    int order;
+
+    if (dev == NULL) {
+        deb_data("dev is NULL\n");
+        return -ENODEV;
+    }	
+
+    if(	atomic_read(&dev->g_AP_use_tx) == 1) {
+        tx_stop_urb_transfer(dev);
+
+        /* decrement the count on our device */
+        //kref_put(&dev->kref, afa_delete);
+
+        if (dev->pTxRingBuffer){
+            order = get_order(dev->dwTxWriteTolBufferSize);
+            free_pages((long unsigned int)dev->pTxRingBuffer, order);
+        }
+
+        if (dev->pTxRingBuffer_cmd){
+            order = get_order(dev->dwTxWriteTolBufferSize_cmd + 8);
+            free_pages((long unsigned int)dev->pTxRingBuffer_cmd, order);
+        }
+
+        if (dev->pTxRingBuffer_low_brate){
+            order = get_order(dev->dwTxWriteTolBufferSize_low_brate + 8);
+            free_pages((long unsigned int)dev->pTxRingBuffer_low_brate, order);
+        }			
+
+#if !(defined(DTVCAM_POWER_CTRL) && defined(AVSENDER_POWER_CTRL))		
+        if(atomic_read(&dev->tx_pw_on) == 1) {
+            if(atomic_read(&dev->g_AP_use_rx) == 0) {   // RX not used, suspend tx.
+                error = DL_ApPwCtrl(&dev->DC, 0, 0);
+                atomic_set(&dev->tx_pw_on, 0);	
+            } else {
+                deb_data("RX lock TX_PowerSaving\n");
+            }
+        }
+#endif		
+
+    }
+    atomic_sub(1, &dev->g_AP_use_tx);
+
+    return 0;
+}
+
+#if LINUX_VERSION_CODE <= KERNEL_VERSION(2,6,35)
+int it950x_usb_tx_ioctl_dev(struct it950x_dev *dev,
+	unsigned int cmd,  unsigned long parg)
+{
+    PCmdRequest pRequest;
+
+    if (dev == NULL) {
+        deb_data("dev is NULL\n");
+        return -ENODEV;
+    }
+
+    switch (cmd)
+    {
+        case IOCTL_ITE_DEMOD_STARTTRANSFER_TX:
+            tx_start_urb_transfer(dev);
+            return 0;
+
+        case IOCTL_ITE_DEMOD_STOPTRANSFER_TX:
+            tx_stop_urb_transfer(dev);
+            return 0;
+
+        case IOCTL_ITE_DEMOD_STARTTRANSFER_CMD_TX:
+            tx_start_urb_transfer_cmd(dev);
+            return 0;
+
+        case IOCTL_ITE_DEMOD_STOPTRANSFER_CMD_TX:
+            tx_stop_urb_transfer_cmd(dev);
+            return 0;
+
+        case IOCTL_ITE_DEMOD_WRITECMD_TX:
+            pRequest = (PCmdRequest) parg;
+            Tx_RingBuffer_cmd(dev, pRequest->cmd, pRequest->len);
+            return 0;		
+
+        case IOCTL_ITE_DEMOD_SETLOWBRATETRANS_TX:
+            SetLowBitRateTransfer(dev, (void*)parg);
+            return 0;
+    }
+    return DL_DemodIOCTLFun((void *)&dev->DC.modulator, (DWORD)cmd, parg);
+}
+#endif
+
+#if LINUX_VERSION_CODE > KERNEL_VERSION(2,6,35)
+long it950x_usb_tx_unlocked_ioctl_dev(
+	struct it950x_dev *dev,
+	unsigned int cmd,
+	unsigned long parg)
+{
+    PCmdRequest pRequest;	
+
+    if (dev == NULL) {
+        deb_data("dev is NULL\n");
+        return -ENODEV;
+    }
+
+    switch (cmd)
+    {
+        case IOCTL_ITE_DEMOD_STARTTRANSFER_TX:
+            tx_start_urb_transfer(dev);
+            return 0;
+
+        case IOCTL_ITE_DEMOD_STOPTRANSFER_TX:
+            tx_stop_urb_transfer(dev);
+            return 0;
+
+        case IOCTL_ITE_DEMOD_STARTTRANSFER_CMD_TX:
+            tx_start_urb_transfer_cmd(dev);
+            return 0;
+
+        case IOCTL_ITE_DEMOD_STOPTRANSFER_CMD_TX:
+            tx_stop_urb_transfer_cmd(dev);
+            return 0;
+
+        case IOCTL_ITE_DEMOD_WRITECMD_TX:
+            pRequest = (PCmdRequest) parg;
+            Tx_RingBuffer_cmd(dev, pRequest->cmd, pRequest->len);
+            return 0;		
+
+        case IOCTL_ITE_DEMOD_SETLOWBRATETRANS_TX:
+            SetLowBitRateTransfer(dev, (void*)parg);
+            return 0;
+    }
+    return DL_DemodIOCTLFun((void *)&dev->DC.modulator, (DWORD)cmd, parg);
+}
+#endif
+
+ssize_t it950x_usb_tx_write_dev(
+        struct it950x_dev *dev,
+	const char __user *user_buffer,
+	size_t count)
+{
+
+    Dword Len = count;
+    DWORD dwError = Error_NO_ERROR;
+
+    /*AirHD RingBuffer*/
+    if (dev == NULL)
+        return -ENODEV;
+#if URB_TEST
+    loop_cnt++;	
+#endif
+    dwError = Tx_RingBuffer(dev, (Byte*)user_buffer, &Len);
+    //printk("[%lu]\n", Len);
+    if(dwError != 0) {
+        deb_data("Tx_RingBuffer error\n");
+        return dwError;
+    }
+    else return Len;
 }
 
 module_init (it950x_module_init);
