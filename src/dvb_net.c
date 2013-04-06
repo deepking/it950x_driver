@@ -95,7 +95,6 @@ void startCapture(struct it950x_dev* dev)
         return;
     }
 
-    /*
     bool bLocked = false;
     err = DTV_IsLocked(dev, &bLocked);
     if (err) {
@@ -109,7 +108,6 @@ void startCapture(struct it950x_dev* dev)
     else {
         printk(KERN_ERR "[dvbnet] Channel unlocked!!\n");
     }
-    */
 
     err = DTV_StartCapture(dev);
     if (err) {

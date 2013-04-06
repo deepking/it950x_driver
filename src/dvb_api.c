@@ -82,7 +82,7 @@ Dword DTV_AcquireChannel(
     request.chip = 0;
     request.frequency = dwFrequency;
     request.bandwidth = wBandwidth;
-    result = rx_ioctl(dev, IOCTL_ITE_DEMOD_ACQUIRECHANNEL, (void *)&request);
+    result = rx_ioctl(dev, IOCTL_ITE_DEMOD_ACQUIRECHANNEL, &request);
     dwError = request.error;
 
     return (dwError);
@@ -96,7 +96,7 @@ Dword DTV_DisablePIDTbl(struct it950x_dev* dev)
 
     request.chip = 0;
     request.control = 0;
-    result = rx_ioctl(dev, IOCTL_ITE_DEMOD_CONTROLPIDFILTER, (void *)&request);
+    result = rx_ioctl(dev, IOCTL_ITE_DEMOD_CONTROLPIDFILTER, &request);
     dwError = request.error;
 
     return(dwError);
@@ -111,7 +111,7 @@ Dword DTV_IsLocked(struct it950x_dev* dev,
 
     request.chip = 0;
     request.locked = (Bool *)pbLocked;
-    result = rx_ioctl(dev, IOCTL_ITE_DEMOD_ISLOCKED, (void *)&request);
+    result = rx_ioctl(dev, IOCTL_ITE_DEMOD_ISLOCKED, &request);
     dwError = request.error;
 
     return (dwError);

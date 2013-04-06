@@ -21,6 +21,8 @@ unsigned int diff_time_tx_write = 0;
 unsigned int min_1 = 0;
 struct timeval now, start;	
 #endif
+
+unsigned int urb_compl_count = 0;
 	
 static DEFINE_MUTEX(it950x_mutex);
 static DEFINE_MUTEX(it950x_urb_kill);
@@ -232,7 +234,7 @@ Dword FillRingBuffer(struct it950x_urb_context *context, Dword dwDataFrameSize)
 	struct it950x_dev *dev = context->dev;
 	Dword dwReadBuffAddr = 0;
 
-	//deb_data("FillRingBufferDVBT %d\n", *dev->pCurrBuffPointAddr);
+	deb_data("FillRingBufferDVBT %d\n", *dev->pCurrBuffPointAddr);
 	//deb_data("Write - w %d, r %d\n", *dev->pCurrBuffPointAddr, (*dev->pReadBuffPointAddr));
 
 	dwReadBuffAddr = (*dev->pReadBuffPointAddr);
@@ -840,12 +842,12 @@ static void write_urb_completion(struct urb *purb)
 	struct it950x_urb_context *context = purb->context;
 	int ptype = usb_pipetype(purb->pipe);
 	
-	//deb_data("enter %s", __func__);
+	deb_data("enter %s", __func__);
 
-	//deb_data("'%s' urb completed. status: %d, length: %d/%d, pack_num: %d, errors: %d\n",
-	//	ptype == PIPE_ISOCHRONOUS ? "isoc" : "bulk",
-	//	purb->status,purb->actual_length,purb->transfer_buffer_length,
-	//	purb->number_of_packets,purb->error_count);
+	deb_data("'%s' urb completed. status: %d, length: %d/%d, pack_num: %d, errors: %d\n",
+		ptype == PIPE_ISOCHRONOUS ? "isoc" : "bulk",
+		purb->status,purb->actual_length,purb->transfer_buffer_length,
+		purb->number_of_packets,purb->error_count);
 	//context->dev->urbstatus[context->index] = 0;
 	switch (purb->status) {
 		case 0:         /* success */
@@ -889,7 +891,7 @@ static void write_urb_completion_low_brate(struct urb *purb)
 	int ret = -ENOMEM;
 	int i;
 	
-	//deb_data("enter %s", __func__);
+	deb_data("enter %s", __func__);
 
 	//deb_data("'%s' urb completed. status: %d, length: %d/%d, pack_num: %d, errors: %d\n",
 	//	ptype == PIPE_ISOCHRONOUS ? "isoc" : "bulk",
@@ -986,12 +988,12 @@ static void urb_completion(struct urb *purb)
 	int ptype = usb_pipetype(purb->pipe);
 	int ret = -ENOMEM;
 
-	//deb_data("%s", __func__);
-	//deb_data("'%s' urb completed. status: %d, length: %d/%d, pack_num: %d, errors: %d\n",
-	//	ptype == PIPE_ISOCHRONOUS ? "isoc" : "bulk",
-	//	purb->status,purb->actual_length,purb->transfer_buffer_length,
-	//	purb->number_of_packets,purb->error_count);
-	//deb_data("urb_complete(%d)\n", context->index);
+	deb_data("%s %d", __func__, urb_compl_count++);
+	deb_data("'%s' urb completed. status: %d, length: %d/%d, pack_num: %d, errors: %d\n",
+		ptype == PIPE_ISOCHRONOUS ? "isoc" : "bulk",
+		purb->status,purb->actual_length,purb->transfer_buffer_length,
+		purb->number_of_packets,purb->error_count);
+	deb_data("urb_complete(%d)\n", context->index);
 		
 	context->dev->urbstatus_rx[context->index] = 0;
 	switch (purb->status) {
@@ -1043,6 +1045,7 @@ static void urb_completion(struct urb *purb)
 		}
 		context->dev->urbstatus_rx[context->index] = 1;
 	}
+    deb_data("%s end", __func__);
 }
 
 /**      AirHD       **********************************************/
@@ -1282,8 +1285,6 @@ static int start_urb_transfer(struct it950x_dev *dev)
 	dev->urb_streaming = 1;
 	ret = 0;
 
-	deb_data("%s() end\n", __func__);
-
 err:
 	return ret;
 }
@@ -1324,6 +1325,10 @@ int it950x_usb_rx_alloc_dev(struct it950x_dev* dev)
 		dev->pCurrBuffPointAddr = (Dword*)dev->pRingBuffer;
 		dev->pReadBuffPointAddr = (Dword*)(dev->pRingBuffer + 4);
 	}
+        else {
+            deb_data("alloc ringbuf error\n");
+            retval = -ENOMEM;
+        }
 	
 	/* increment our usage count for the device */
 	//kref_get(&dev->kref);
@@ -1915,13 +1920,14 @@ ssize_t it950x_usb_rx_read_dev(
 	char __user *buf,
 	size_t count)
 {
+	deb_data("%s()\n", __func__);
 	Dword Len = count;
 	if (dev0 == NULL)
 		return -ENODEV;
 
 	ReadRingBuffer(dev0, buf, &Len);
 
-	//deb_data("ReadRingBuffer - %d\n", Len);
+	deb_data("ReadRingBuffer - %d\n", Len);
 
 	return Len;
 
@@ -2163,7 +2169,7 @@ static int it950x_suspend(struct usb_interface *intf, pm_message_t state)
 	dev = usb_get_intfdata(intf);
 	if (!dev) 
 		deb_data("dev = NULL");
-	//deb_data("Enter %s Function\n", __FUNCTION__);
+	deb_data("Enter %s Function\n", __FUNCTION__);
 
 #ifdef EEEPC
 	error = DL_Reboot();
@@ -2182,6 +2188,7 @@ static int it950x_suspend(struct usb_interface *intf, pm_message_t state)
     }
 #endif
 	
+	deb_data("Leave %s Function\n", __FUNCTION__);
 	return 0;
 }
 
@@ -2191,7 +2198,7 @@ static int it950x_resume(struct usb_interface *intf)
 	int error;
 	struct it950x_dev *dev;
 
-	//deb_data("Enter %s Function\n",__FUNCTION__);
+	deb_data("Enter %s Function\n",__FUNCTION__);
 	dev = usb_get_intfdata(intf);
 	if (!dev) 
 		deb_data("dev = NULL");
@@ -2211,6 +2218,7 @@ static int it950x_resume(struct usb_interface *intf)
     }
 #endif
 	
+    deb_data("Leave %s Function\n",__FUNCTION__);
     return 0;
 }
 
@@ -2240,19 +2248,17 @@ static void it950x_disconnect(struct usb_interface *intf)
 #endif
 
 	tx_free_urbs(dev);
-//	rx_free_urbs(dev);
+	rx_free_urbs(dev);
 	
 	usb_set_intfdata(intf, NULL);
 
 	/* give back our minor */
 	
-	/* 
 	intf->minor = dev->rx_chip_minor;
-	usb_deregister_dev(intf, &it950x_class);
+	//usb_deregister_dev(intf, &it950x_class);
 
 	intf->minor = dev->tx_chip_minor;
-	usb_deregister_dev(intf, &it950x_class_tx);
-	*/
+	//usb_deregister_dev(intf, &it950x_class_tx);
 
 	mutex_unlock(&it950x_mutex);
 	//unlock_kernel();
