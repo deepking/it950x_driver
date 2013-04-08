@@ -10,6 +10,7 @@
  
 #include "it950x-core.h"
 #include "modulatorIocontrol.h"
+#include "dvb_net.h"
 
 /* Get a minor range for devices from the usb maintainer */
 #define USB_it913x_MINOR_RANGE 47
@@ -122,6 +123,7 @@ struct it950x_dev {
 	Dword dwRxTolBufferSize;
 	Dword dwRxReadRemaingBufferSize;
 
+        dvb_netdev* dvbdev;
 };
 
 #define to_afa_dev(d) container_of(d, struct it950x_dev, kref)
@@ -656,7 +658,7 @@ DWORD Rx_RingBuffer(
     
     if((dev->dwRxReadRemaingBufferSize) < dwCpBuffLen){
 		*pBufferLength = 0;
-		//deb_data("\t Warning: ReadRemaingBufferSize(%lu) < Request(%lu)\n", chip->dwReadRemaingBufferSize, dwCpBuffLen);
+		//deb_data("\t Warning: ReadRemaingBufferSize(%lu) < Request(%lu)\n", dev->dwRxReadRemaingBufferSize, dwCpBuffLen);
 		return Error_NO_ERROR;
 	}
 	
@@ -694,6 +696,8 @@ DWORD Rx_RingBuffer(
 	
 	//Submit urb
 	if(dev->rx_urb_streaming == 1 && dev->rx_first_urb_reset == 1){
+                //deb_data("Rx_RingBuffer::submit_urb() RxReadBufferPointAddr=%lu rx_urb_index=%d rx_urb_counter=%d\n",
+                //        dev->RxReadBuffPointAddr, dev->rx_urb_index, atomic_read(&dev->rx_urb_counter));
 		//allow submit urb && first urb already resubmit
 		while((dev->RxReadBuffPointAddr - (dev->rx_urb_index * URB_BUFSIZE_RX)) >= URB_BUFSIZE_RX && atomic_read(&dev->rx_urb_counter) > 0){
 			//while urb empty and not submit
@@ -1525,6 +1529,10 @@ static int it950x_probe(struct usb_interface *intf, const struct usb_device_id *
 #endif	
 	deb_data("USB ITEtech device now attached to USBSkel-%d \n", intf->minor);
 
+	dev->dvbdev = dvb_alloc_netdev(dev);
+	if (dev->dvbdev == NULL)
+	    deb_data("ERROR: dvb_alloc_netdev");
+
 	return retval;
 }
 
@@ -1634,6 +1642,9 @@ static void it950x_disconnect(struct usb_interface *intf)
 	if (dev){
 		if(dev->file) dev->file->private_data = NULL;
 		if(dev->tx_file) dev->tx_file->private_data = NULL;
+		if (dev->dvbdev) {
+                    dvb_free_netdev(dev->dvbdev);
+                }
 		kfree(dev);
 	}
 	
