@@ -21,6 +21,21 @@ Dword g_ITEAPI_GetDrvInfo(struct it950x_dev* dev, OUT PTxDemodDriverInfo pDriver
 
 Dword g_ITEAPI_TxSendTSData(struct it950x_dev* dev, Byte* pBuffer, Dword pdwBufferLength);
 
+Dword g_ITEAPI_TxSetPeridicCustomPacket(
+        struct it950x_dev* dev,
+        IN int bufferSize, 
+        IN Byte *TableBuffer, 
+        IN Byte index);
+
+Dword g_ITEAPI_TxSetPeridicCustomPacketTimer(
+        struct it950x_dev* dev,
+        IN Byte index,
+        IN Byte timer_interval);
+
+Dword g_ITEAPI_TxSendCustomPacketOnce(
+        struct it950x_dev* dev,
+        IN int bufferSize,
+        IN Byte *TableBuffer);
 
 /**
  * @param dwFrequency frequency in KHz

@@ -63,6 +63,72 @@ Dword g_ITEAPI_TxSendTSData(struct it950x_dev* dev, Byte* pBuffer, Dword pdwBuff
     return it950x_usb_tx_write_dev(dev, pBuffer, pdwBufferLength);
 }
 
+Dword g_ITEAPI_TxSetPeridicCustomPacket(
+        struct it950x_dev* dev,
+        IN int bufferSize, 
+        IN Byte *TableBuffer, 
+        IN Byte index)
+{
+    Dword dwError = Error_NO_ERROR;
+    int result;
+    AccessFwPSITableRequest request; 
+
+    if(bufferSize != 188)
+        return -1;
+
+    if (dev == NULL)
+        return -1;
+
+    request.psiTableIndex = index;
+    request.pbuffer = TableBuffer;
+    result = tx_ioctl(dev, IOCTL_ITE_DEMOD_ACCESSFWPSITABLE_TX, &request);
+    dwError = request.error;
+
+    return (dwError);
+}
+
+Dword g_ITEAPI_TxSetPeridicCustomPacketTimer(
+        struct it950x_dev* dev,
+        IN Byte index,
+        IN Byte timer_interval)
+{
+    Dword dwError = Error_NO_ERROR;
+    int result;
+    SetFwPSITableTimerRequest request; 
+
+    if (dev == NULL)
+        return -1;
+
+    request.psiTableIndex = index;
+    request.timer = timer_interval;
+    result = tx_ioctl(dev, IOCTL_ITE_DEMOD_SETFWPSITABLETIMER_TX, &request);
+    dwError = request.error;
+
+    return (dwError);
+}
+
+Dword g_ITEAPI_TxSendCustomPacketOnce(
+        struct it950x_dev* dev,
+        IN int bufferSize,
+        IN Byte *TableBuffer)
+{
+    Dword dwError = Error_NO_ERROR;
+    int result;
+    SendHwPSITableRequest request; 
+
+    if(bufferSize != 188)
+        return -1;
+
+    if (dev == NULL)
+        return -1;
+
+    request.pbuffer = TableBuffer;
+    result = tx_ioctl(dev, IOCTL_ITE_DEMOD_SENDHWPSITABLE_TX, &request);
+    dwError = request.error;
+
+    return (dwError);
+}
+
 // --------------------------------------------------------------------------
 // RX
 // --------------------------------------------------------------------------
