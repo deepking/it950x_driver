@@ -16,14 +16,17 @@
 #include "dvb_net.h"
 #include "dvb_api.h"
 #include "error.h"
-
+#define MIN(X,Y) (((X) < (Y)) ? : (X) : (Y))
 #define _debug(fmt, args...)
+
+static Byte g_null_packet[188] = {0x47,0x1f,0xff,0x1c,0x00,0x00};
 
 static void intrpt_routine(struct work_struct*);
 static int die = 0;     /* set this to 1 for shutdown */
 static struct workqueue_struct *my_workqueue;
 static DECLARE_DELAYED_WORK(ReadTask, intrpt_routine);
 static struct it950x_dev* itdev;
+static struct net_device* g_netdev = NULL;
 
 static void hexdump( const unsigned char *buf, unsigned short len )
 {
@@ -62,6 +65,7 @@ static void intrpt_routine(struct work_struct* work)
     Dword len = 188;
     Dword err = 0;
     Byte buf[len];
+    memset(buf, 0, len);
     Dword r;
     unsigned short pidFromBuf;
     int nFailCount = 0;
@@ -75,7 +79,7 @@ static void intrpt_routine(struct work_struct* work)
         err = DTV_GetData(itdev, buf, &r);
 
         if (r<=0 || r != 188) {
-            printk(KERN_ERR "ERROR: only read %lu\n", r);
+            //printk(KERN_ERR "ERROR: only read %lu\n", r);
             goto next;
         }
 
@@ -112,8 +116,32 @@ static void intrpt_routine(struct work_struct* work)
             continue;
         }
 
+if (!g_netdev)
+    goto next;
+
+Byte nLen = buf[4];
+if (nLen > 183) {
+    printk(KERN_ERR "len %d\n", nLen);
+    nLen = 183;
+}
+
+Byte shortBuf[188];
+
+memcpy(shortBuf, buf+5, nLen);
+
+struct sk_buff* skb = dev_alloc_skb(188 + 2);
+skb_reserve(skb, 2); /* align IP on 16B boundary */  
+memcpy(skb_put(skb, 188), shortBuf, 188);
+skb->dev = g_netdev;
+skb->protocol = eth_type_trans(skb, g_netdev); //htons(ETH_P_802_2);
+skb->ip_summed = CHECKSUM_UNNECESSARY;
+skb->pkt_type=PACKET_BROADCAST;
+
+netif_rx(skb);
+
+//hexdump(buf, 188);
         buf[len - 1] = '\0';
-        printk(KERN_INFO "read: %s\n", buf);
+        printk(KERN_INFO "read: %d %s\n", nLen, shortBuf);
     }
 /*
     printk(KERN_INFO "[dvbnet] rx run\n");
@@ -201,20 +229,23 @@ static int dvb_net_tx(struct sk_buff *skb, struct net_device *dev)
 {
     dvb_netdev* netdev = netdev_priv(dev);
     Dword len = 0;
-    Byte NullPacket[188]={0x47,0x1f,0xaf,0x1c,0x00,0x00};
-    NullPacket[4] = 'h';
-    NullPacket[5] = 'a';
-    NullPacket[6] = 'h';
-    NullPacket[7] = 'a';
-    NullPacket[8] = '\n';
-    NullPacket[9] = '\0';
+    Byte nLen = 0;
+    Byte pkt[188]={0x47,0x1f,0xaf,0x1c,0x00,0x00,0x00,0x00,0x00,0x00,0x00};
+
+    nLen = (skb->len < 183) ? skb->len : 183;
+    pkt[4] = nLen;
+    memcpy(pkt+5, skb->data, nLen);
 
 
-    //printk(KERN_INFO "dvbnet tx");
+    char buf[200];
+    buf[199] = '\0';
+    memcpy(buf, skb->data, nLen);
+    printk(KERN_INFO "dvbnet tx %d %s", nLen, buf);
+
     //hexdump(skb->data, skb->len);
     /* dev_kfree_skb(skb); */
     //len = g_ITEAPI_TxSendTSData(netdev->itdev, skb->data, skb->len);
-    len = g_ITEAPI_TxSendTSData(netdev->itdev, NullPacket, 188);
+    len = g_ITEAPI_TxSendTSData(netdev->itdev, pkt, 188);
     if (len != 188) {
         printk(KERN_ERR "sendTsData error %ld\n", len);
         return len; //XXX
@@ -270,6 +301,21 @@ static Dword startTransfer(struct it950x_dev* dev)
     dwError = g_ITEAPI_TxSetChannelModulation(dev, &req);
     if (dwError != Error_NO_ERROR) {
         printk(KERN_ERR "setChannelModulation %ld\n", dwError);
+        return dwError;
+    }
+
+    Byte CustomPacket_3[188]={0x47,0x10,0x03,0x1c,0x00,0x00};
+    Byte CustomPacket_4[188]={0x47,0x10,0x04,0x1c,0x00,0x00};
+    Byte CustomPacket_5[188]={0x47,0x10,0x05,0x1c,0x00,0x00};
+    dwError = g_ITEAPI_TxSetPeridicCustomPacket(dev, 188, CustomPacket_3, 1);
+    if (dwError != Error_NO_ERROR) {
+        printk(KERN_ERR "g_ITEAPI_TxAccessFwPSITable 1 fail %ld\n", dwError);
+        return dwError;
+    }
+
+    dwError = g_ITEAPI_TxSetPeridicCustomPacketTimer(dev, 1, 100);//ms
+    if (dwError != Error_NO_ERROR) {
+        printk(KERN_ERR "g_ITEAPI_TxSetFwPSITableTimer  %d fail\n", 1);
         return dwError;
     }
 
@@ -413,6 +459,7 @@ dvb_netdev* dvb_alloc_netdev(struct it950x_dev* itdev)
         return NULL;
     }
 
+g_netdev = netdev;
     return dev;
 }
 
@@ -423,42 +470,3 @@ void dvb_free_netdev(dvb_netdev* dev)
     it950x_usb_rx_free_dev(dev->itdev);
 }
 
-/*
-static __init int dvb_net_init_module(void)
-{
-    printk(KERN_INFO "dvbnet init.\n");
-
-    //it950x_usb_rx_free_dev(NULL);
-
-    //struct net_device *dev;
-    int err = 0;
-    dev = alloc_netdev(0, "dvb%d", dvb_net_setup);
-    if (!dev) {
-        printk(KERN_ERR "dvbnet alloc netdev err\n");
-        goto init_module_out;
-    }
-
-    err = register_netdev(dev);
-    if (err) {
-        printk(KERN_ERR "dvbnet register err\n");
-        goto init_module_out;
-    }
-
-    return 0;
-
-init_module_out:
-    if (dev) 
-        free_netdev(dev);
-
-    return err;
-}
-
-static __exit void dvb_net_cleanup_module(void)
-{
-    printk(KERN_INFO "dvb net cleanup\n");
-    unregister_netdev(dev);
-}
-
-module_init(dvb_net_init_module);
-module_exit(dvb_net_cleanup_module);
-*/
