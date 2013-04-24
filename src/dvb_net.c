@@ -12,10 +12,12 @@
 #include <linux/workqueue.h>    /* We scheduale tasks here */
 #include <linux/sched.h>        /* We need to put ourselves to sleep 
                                    and wake up later */
+#include <linux/slab.h>
 
 #include "dvb_net.h"
 #include "dvb_api.h"
 #include "error.h"
+#include "ule.h"
 #define MIN(X,Y) (((X) < (Y)) ? : (X) : (Y))
 #define _debug(fmt, args...)
 
@@ -55,11 +57,6 @@ static void hexdump( const unsigned char *buf, unsigned short len )
     }
 }
 
-static unsigned short ts_getPID(const unsigned char *header)
-{
-    return ((header[1] & 0x1F) << 8) | header[2];
-}
-
 static void intrpt_routine(struct work_struct* work)
 {
     Dword len = 188;
@@ -91,7 +88,7 @@ static void intrpt_routine(struct work_struct* work)
         */
 
         if (buf[0] != 0x47) {
-            //debug("desync (%x, %x, %x, %x) - %lu\n", buffer[0], buffer[1], buffer[2], buffer[3], r);
+            //printk(KERN_INFO "desync (%x, %x, %x, %x) - %lu\n", buf[0], buf[1], buf[2], buf[3], r);
             while (buf[0] != 0x47) {
                 r = 1;
                 err = DTV_GetData(itdev, buf, &r);
@@ -119,6 +116,24 @@ static void intrpt_routine(struct work_struct* work)
 if (!g_netdev)
     goto next;
 
+
+printk(KERN_INFO "read ok\n");
+dvb_netdev* netdev;
+netdev = netdev_priv(g_netdev);
+ule_demux(&netdev->demux, buf, len);
+if (netdev->demux.ule_sndu_outbuf) {
+    printk(KERN_INFO "outbuf: len=%d", netdev->demux.ule_sndu_outbuf_len);
+    hexdump(netdev->demux.ule_sndu_outbuf, netdev->demux.ule_sndu_outbuf_len);
+                
+    // clean & reset outbuf
+    kfree(netdev->demux.ule_sndu_outbuf);
+    netdev->demux.ule_sndu_outbuf = NULL;
+    netdev->demux.ule_sndu_outbuf_len = 0;
+}
+else {
+    printk("not a packet len=%d", netdev->demux.ule_sndu_outbuf_len);
+}
+/*
 Byte nLen = buf[4];
 if (nLen > 183) {
     printk(KERN_ERR "len %d\n", nLen);
@@ -130,7 +145,7 @@ Byte shortBuf[188];
 memcpy(shortBuf, buf+5, nLen);
 
 struct sk_buff* skb = dev_alloc_skb(188 + 2);
-skb_reserve(skb, 2); /* align IP on 16B boundary */  
+skb_reserve(skb, 2); // align IP on 16B boundary
 memcpy(skb_put(skb, 188), shortBuf, 188);
 skb->dev = g_netdev;
 skb->protocol = eth_type_trans(skb, g_netdev); //htons(ETH_P_802_2);
@@ -142,6 +157,7 @@ netif_rx(skb);
 //hexdump(buf, 188);
         buf[len - 1] = '\0';
         printk(KERN_INFO "read: %d %s\n", nLen, shortBuf);
+*/
     }
 /*
     printk(KERN_INFO "[dvbnet] rx run\n");
@@ -225,6 +241,7 @@ void stopCapture(void)
     }
 }
 
+/*
 static int dvb_net_tx(struct sk_buff *skb, struct net_device *dev)
 {
     dvb_netdev* netdev = netdev_priv(dev);
@@ -243,13 +260,51 @@ static int dvb_net_tx(struct sk_buff *skb, struct net_device *dev)
     printk(KERN_INFO "dvbnet tx %d %s", nLen, buf);
 
     //hexdump(skb->data, skb->len);
-    /* dev_kfree_skb(skb); */
+    //dev_kfree_skb(skb);
     //len = g_ITEAPI_TxSendTSData(netdev->itdev, skb->data, skb->len);
     len = g_ITEAPI_TxSendTSData(netdev->itdev, pkt, 188);
     if (len != 188) {
         printk(KERN_ERR "sendTsData error %ld\n", len);
         return len; //XXX
     }
+    return NETDEV_TX_OK;
+}
+*/
+
+static int dvb_net_tx(struct sk_buff *skb, struct net_device *dev)
+{
+    dvb_netdev* netdev;
+    SNDUInfo snduinfo;
+    uint32_t totalLength;
+    ULEEncapCtx encapCtx;
+    Dword len = 0;
+    
+    netdev = netdev_priv(dev);
+
+    ule_init(&snduinfo, IPv4, skb->data, skb->len);
+    totalLength = ule_getTotalLength(&snduinfo);
+    unsigned char pkt[totalLength];
+    ule_encode(&snduinfo, pkt, totalLength);
+    
+    //printk(KERN_INFO "sndu: totalLength=%d, Len=%d, type=%xd, dataLen=%d\n", 
+    //    totalLength, snduinfo.length, snduinfo.type, snduinfo.pdu.length);
+
+    ule_initEncapCtx(&encapCtx);
+    encapCtx.pid = 0x1FAF;// TODO: param
+    encapCtx.snduPkt = pkt;
+    encapCtx.snduLen = totalLength;
+
+    while (encapCtx.snduIndex < encapCtx.snduLen) {
+        ule_padding(&encapCtx);
+        //hexdump(encapCtx.tsPkt, 188);
+
+        len = g_ITEAPI_TxSendTSData(netdev->itdev, pkt, 188);
+        if (len != 188) {
+            printk(KERN_ERR "sendTsData error %ld\n", len);
+            return len; //XXX
+        }
+    }
+
     return NETDEV_TX_OK;
 }
 
@@ -458,6 +513,10 @@ dvb_netdev* dvb_alloc_netdev(struct it950x_dev* itdev)
         printk(KERN_ERR "dvbnet register err\n");
         return NULL;
     }
+
+
+    ule_initDemuxCtx(&dev->demux);
+    dev->demux.pid = 0x1FAF;
 
 g_netdev = netdev;
     return dev;
