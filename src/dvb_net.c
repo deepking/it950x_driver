@@ -296,9 +296,10 @@ static int dvb_net_tx(struct sk_buff *skb, struct net_device *dev)
 
     while (encapCtx.snduIndex < encapCtx.snduLen) {
         ule_padding(&encapCtx);
+        printk(KERN_INFO "tx snduIndex:%d snduLen:%d", encapCtx.snduIndex, encapCtx.snduLen);
         //hexdump(encapCtx.tsPkt, 188);
 
-        len = g_ITEAPI_TxSendTSData(netdev->itdev, pkt, 188);
+        len = g_ITEAPI_TxSendTSData(netdev->itdev, encapCtx.tsPkt, 188);
         if (len != 188) {
             printk(KERN_ERR "sendTsData error %ld\n", len);
             return len; //XXX
@@ -359,6 +360,7 @@ static Dword startTransfer(struct it950x_dev* dev)
         return dwError;
     }
 
+    /*
     Byte CustomPacket_3[188]={0x47,0x10,0x03,0x1c,0x00,0x00};
     Byte CustomPacket_4[188]={0x47,0x10,0x04,0x1c,0x00,0x00};
     Byte CustomPacket_5[188]={0x47,0x10,0x05,0x1c,0x00,0x00};
@@ -373,6 +375,7 @@ static Dword startTransfer(struct it950x_dev* dev)
         printk(KERN_ERR "g_ITEAPI_TxSetFwPSITableTimer  %d fail\n", 1);
         return dwError;
     }
+    */
 
     dwError = g_ITEAPI_StartTransfer(dev);
     if (dwError != Error_NO_ERROR) {
