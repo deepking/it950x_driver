@@ -116,14 +116,22 @@ static void intrpt_routine(struct work_struct* work)
 if (!g_netdev)
     goto next;
 
-
-printk(KERN_INFO "read ok\n");
 dvb_netdev* netdev;
 netdev = netdev_priv(g_netdev);
 ule_demux(&netdev->demux, buf, len);
 if (netdev->demux.ule_sndu_outbuf) {
     printk(KERN_INFO "outbuf: len=%d", netdev->demux.ule_sndu_outbuf_len);
-    hexdump(netdev->demux.ule_sndu_outbuf, netdev->demux.ule_sndu_outbuf_len);
+    //hexdump(netdev->demux.ule_sndu_outbuf, netdev->demux.ule_sndu_outbuf_len);
+
+    struct sk_buff* skb = dev_alloc_skb(netdev->demux.ule_sndu_outbuf_len);
+    //skb_reserve(skb, 2); // align IP on 16B boundary
+    memcpy(skb_put(skb, netdev->demux.ule_sndu_outbuf_len), netdev->demux.ule_sndu_outbuf, netdev->demux.ule_sndu_outbuf_len);
+    skb->dev = g_netdev;
+    skb->protocol = eth_type_trans(skb, g_netdev);
+    //skb->ip_summed = CHECKSUM_UNNECESSARY;
+    //skb->pkt_type=PACKET_BROADCAST;
+
+    netif_rx(skb);
                 
     // clean & reset outbuf
     kfree(netdev->demux.ule_sndu_outbuf);
@@ -133,48 +141,9 @@ if (netdev->demux.ule_sndu_outbuf) {
 else {
     printk("not a packet len=%d", netdev->demux.ule_sndu_outbuf_len);
 }
-/*
-Byte nLen = buf[4];
-if (nLen > 183) {
-    printk(KERN_ERR "len %d\n", nLen);
-    nLen = 183;
-}
 
-Byte shortBuf[188];
-
-memcpy(shortBuf, buf+5, nLen);
-
-struct sk_buff* skb = dev_alloc_skb(188 + 2);
-skb_reserve(skb, 2); // align IP on 16B boundary
-memcpy(skb_put(skb, 188), shortBuf, 188);
-skb->dev = g_netdev;
-skb->protocol = eth_type_trans(skb, g_netdev); //htons(ETH_P_802_2);
-skb->ip_summed = CHECKSUM_UNNECESSARY;
-skb->pkt_type=PACKET_BROADCAST;
-
-netif_rx(skb);
-
-//hexdump(buf, 188);
-        buf[len - 1] = '\0';
-        printk(KERN_INFO "read: %d %s\n", nLen, shortBuf);
-*/
     }
-/*
-    printk(KERN_INFO "[dvbnet] rx run\n");
 
-    memset(buf, 0, len);
-
-    err = DTV_GetData(itdev, buf, &len);
-    if (len == 188) {
-        printk(KERN_INFO "[dvbnet] rx\n");
-        hexdump(buf, len);
-    }
-    else if (err) {
-        printk(KERN_ERR "DTV_GetData error %lu\n", err);
-    }
-    */
-
-    /* If cleanup wants us to die */
 next:
     if (!die)
         queue_delayed_work(my_workqueue, &ReadTask, 50);
