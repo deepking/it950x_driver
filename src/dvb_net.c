@@ -75,8 +75,9 @@ static void intrpt_sendTask(struct work_struct* work)
     }
 
 next_send:
+    printk(KERN_INFO "send Task\n");
     if (!g_die)
-        queue_delayed_work(g_workqueue, &SendTask, 100);
+        queue_delayed_work(g_workqueue, &SendTask, 50);
 }
 
 static void intrpt_readTask(struct work_struct* work)
@@ -90,7 +91,7 @@ static void intrpt_readTask(struct work_struct* work)
     int nFailCount = 0;
 
     if (!g_itdev)
-        return;
+        goto next;
 
     while (true) {
         memset(buf, 0, len);
@@ -167,6 +168,7 @@ else {
     }
 
 next:
+printk(KERN_INFO "schedule read task\n");
     if (!g_die) {
         queue_delayed_work(g_workqueue, &ReadTask, 50);
     }
@@ -362,6 +364,7 @@ static int dvb_net_open(struct net_device *dev)
 
     netdev = netdev_priv(dev);
 
+    g_die = 0;
     startTransfer(netdev->itdev);
     startCapture(netdev->itdev);
 
@@ -494,5 +497,6 @@ void dvb_free_netdev(dvb_netdev* dev)
     unregister_netdev(dev->netdev);
     it950x_usb_tx_free_dev(dev->itdev);
     it950x_usb_rx_free_dev(dev->itdev);
+    destroy_workqueue(g_workqueue);
 }
 
