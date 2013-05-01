@@ -19,15 +19,17 @@
 #include "error.h"
 #include "ule.h"
 #define MIN(X,Y) (((X) < (Y)) ? : (X) : (Y))
-#define _debug(fmt, args...)
 
 static Byte g_null_packet[188] = {0x47,0x1f,0xff,0x1c,0x00,0x00};
 
-static void intrpt_routine(struct work_struct*);
-static int die = 0;     /* set this to 1 for shutdown */
-static struct workqueue_struct *my_workqueue;
-static DECLARE_DELAYED_WORK(ReadTask, intrpt_routine);
-static struct it950x_dev* itdev;
+static void intrpt_readTask(struct work_struct*);
+static void intrpt_sendTask(struct work_struct*);
+
+static int g_die = 0;     /* set this to 1 for shutdown */
+static struct workqueue_struct *g_workqueue = NULL;
+static DECLARE_DELAYED_WORK(ReadTask, intrpt_readTask);
+static DECLARE_DELAYED_WORK(SendTask, intrpt_sendTask);
+static struct it950x_dev* g_itdev = NULL;
 static struct net_device* g_netdev = NULL;
 
 static void hexdump( const unsigned char *buf, unsigned short len )
@@ -57,7 +59,27 @@ static void hexdump( const unsigned char *buf, unsigned short len )
     }
 }
 
-static void intrpt_routine(struct work_struct* work)
+static void intrpt_sendTask(struct work_struct* work)
+{
+    Dword dwError = 0;
+    Byte garbage[188] = {0x47,0x1f,0xff,0x1c, 0x00, 0x00};
+
+    if (!g_itdev) {
+        goto next_send;
+    }
+
+    dwError = g_ITEAPI_TxSendTSData(g_itdev, garbage, 188);
+    if (dwError != 188) {
+        printk(KERN_ERR "sendTask g_ITEAPI_TxSendTSData %ld\n", dwError);
+        goto next_send;
+    }
+
+next_send:
+    if (!g_die)
+        queue_delayed_work(g_workqueue, &SendTask, 100);
+}
+
+static void intrpt_readTask(struct work_struct* work)
 {
     Dword len = 188;
     Dword err = 0;
@@ -67,13 +89,13 @@ static void intrpt_routine(struct work_struct* work)
     unsigned short pidFromBuf;
     int nFailCount = 0;
 
-    if (!itdev)
+    if (!g_itdev)
         return;
 
     while (true) {
         memset(buf, 0, len);
         r = len;
-        err = DTV_GetData(itdev, buf, &r);
+        err = DTV_GetData(g_itdev, buf, &r);
 
         if (r<=0 || r != 188) {
             //printk(KERN_ERR "ERROR: only read %lu\n", r);
@@ -91,7 +113,7 @@ static void intrpt_routine(struct work_struct* work)
             //printk(KERN_INFO "desync (%x, %x, %x, %x) - %lu\n", buf[0], buf[1], buf[2], buf[3], r);
             while (buf[0] != 0x47) {
                 r = 1;
-                err = DTV_GetData(itdev, buf, &r);
+                err = DTV_GetData(g_itdev, buf, &r);
                 if (r <= 0 || r != 1) {
                     printk(KERN_ERR "ERROR read %lu", r);
                     goto next;
@@ -100,7 +122,7 @@ static void intrpt_routine(struct work_struct* work)
 
             // remaining
             r = 187;
-            DTV_GetData(itdev, buf+1, &r);
+            DTV_GetData(g_itdev, buf+1, &r);
             if (r != 187) {
                 printk(KERN_ERR "sync error read %lu", r);
                 continue;
@@ -145,8 +167,9 @@ else {
     }
 
 next:
-    if (!die)
-        queue_delayed_work(my_workqueue, &ReadTask, 50);
+    if (!g_die) {
+        queue_delayed_work(g_workqueue, &ReadTask, 50);
+    }
 }
 
 void startCapture(struct it950x_dev* dev)
@@ -193,52 +216,19 @@ void startCapture(struct it950x_dev* dev)
         return;
     }
 
-    itdev = dev;
-
-    my_workqueue = create_workqueue("workqueue");
-    queue_delayed_work(my_workqueue, &ReadTask, 1000);
+    queue_delayed_work(g_workqueue, &ReadTask, 1000);
 
     printk(KERN_INFO "dvbnet startCapture ok!\n");
 }
 
 void stopCapture(void)
 {
-    die = 1;
-    if (itdev) {
-        DTV_StopCapture(itdev);
-        itdev = NULL;
+    g_die = 1;
+    if (g_itdev) {
+        DTV_StopCapture(g_itdev);
+        g_itdev = NULL;
     }
 }
-
-/*
-static int dvb_net_tx(struct sk_buff *skb, struct net_device *dev)
-{
-    dvb_netdev* netdev = netdev_priv(dev);
-    Dword len = 0;
-    Byte nLen = 0;
-    Byte pkt[188]={0x47,0x1f,0xaf,0x1c,0x00,0x00,0x00,0x00,0x00,0x00,0x00};
-
-    nLen = (skb->len < 183) ? skb->len : 183;
-    pkt[4] = nLen;
-    memcpy(pkt+5, skb->data, nLen);
-
-
-    char buf[200];
-    buf[199] = '\0';
-    memcpy(buf, skb->data, nLen);
-    printk(KERN_INFO "dvbnet tx %d %s", nLen, buf);
-
-    //hexdump(skb->data, skb->len);
-    //dev_kfree_skb(skb);
-    //len = g_ITEAPI_TxSendTSData(netdev->itdev, skb->data, skb->len);
-    len = g_ITEAPI_TxSendTSData(netdev->itdev, pkt, 188);
-    if (len != 188) {
-        printk(KERN_ERR "sendTsData error %ld\n", len);
-        return len; //XXX
-    }
-    return NETDEV_TX_OK;
-}
-*/
 
 static int dvb_net_tx(struct sk_buff *skb, struct net_device *dev)
 {
@@ -351,6 +341,8 @@ static Dword startTransfer(struct it950x_dev* dev)
         printk(KERN_ERR "startTransfer %ld\n", dwError);
         return dwError;
     }
+
+    queue_delayed_work(g_workqueue, &SendTask, 50);
 
     return dwError;
 }
@@ -490,7 +482,10 @@ dvb_netdev* dvb_alloc_netdev(struct it950x_dev* itdev)
     ule_initDemuxCtx(&dev->demux);
     dev->demux.pid = 0x1FAF;
 
+g_itdev = itdev;
+g_workqueue = create_workqueue("workqueue");
 g_netdev = netdev;
+
     return dev;
 }
 
