@@ -478,6 +478,7 @@ void ule_resetDemuxCtx(ULEDemuxCtx* p)
     p->ule_sndu_outbuf_len = 0;
 }
 
+/*
 static void hexdump( const unsigned char *buf, unsigned short len ){
     char str[80], octet[10];
     int ofs, i, l;
@@ -499,3 +500,4 @@ static void hexdump( const unsigned char *buf, unsigned short len ){
     }
 }
 
+*/

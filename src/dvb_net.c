@@ -19,7 +19,7 @@
 #include "error.h"
 #include "ule.h"
 #define MIN(X,Y) (((X) < (Y)) ? : (X) : (Y))
-
+#define RX_RING_BUF_COUNT 348
 static Byte g_null_packet[188] = {0x47,0x1f,0xff,0x1c,0x00,0x00};
 
 static void intrpt_readTask(struct work_struct*);
@@ -31,6 +31,7 @@ static DECLARE_DELAYED_WORK(ReadTask, intrpt_readTask);
 static DECLARE_DELAYED_WORK(SendTask, intrpt_sendTask);
 static struct it950x_dev* g_itdev = NULL;
 static struct net_device* g_netdev = NULL;
+static atomic_t g_tx_count;
 
 static void hexdump( const unsigned char *buf, unsigned short len )
 {
@@ -63,19 +64,31 @@ static void intrpt_sendTask(struct work_struct* work)
 {
     Dword dwError = 0;
     Byte garbage[188] = {0x47,0x1f,0xff,0x1c, 0x00, 0x00};
+    int count;
+    int i;
 
     if (!g_itdev) {
         goto next_send;
     }
 
-    dwError = g_ITEAPI_TxSendTSData(g_itdev, garbage, 188);
-    if (dwError != 188) {
-        printk(KERN_ERR "sendTask g_ITEAPI_TxSendTSData %ld\n", dwError);
+    count = atomic_read(&g_tx_count);
+    if (count >= RX_RING_BUF_COUNT) {
         goto next_send;
+    }
+    else {
+        for (i = RX_RING_BUF_COUNT - count; i > 0; i--) {
+            dwError = g_ITEAPI_TxSendTSData(g_itdev, garbage, 188);
+            if (dwError != 188) {
+                printk(KERN_ERR "sendTask g_ITEAPI_TxSendTSData %ld\n", dwError);
+                goto next_send;
+            }
+        }
     }
 
 next_send:
-    printk(KERN_INFO "send Task\n");
+//printk(KERN_INFO "send Task\n");
+    // reset counter
+    atomic_set(&g_tx_count, 0);
     if (!g_die)
         queue_delayed_work(g_workqueue, &SendTask, 50);
 }
@@ -85,10 +98,13 @@ static void intrpt_readTask(struct work_struct* work)
     Dword len = 188;
     Dword err = 0;
     Byte buf[len];
-    memset(buf, 0, len);
     Dword r;
     unsigned short pidFromBuf;
     int nFailCount = 0;
+    dvb_netdev* netdev;
+    struct sk_buff* skb;
+
+    memset(buf, 0, len);
 
     if (!g_itdev)
         goto next;
@@ -139,14 +155,13 @@ static void intrpt_readTask(struct work_struct* work)
 if (!g_netdev)
     goto next;
 
-dvb_netdev* netdev;
 netdev = netdev_priv(g_netdev);
 ule_demux(&netdev->demux, buf, len);
 if (netdev->demux.ule_sndu_outbuf) {
     printk(KERN_INFO "outbuf: len=%d", netdev->demux.ule_sndu_outbuf_len);
-    //hexdump(netdev->demux.ule_sndu_outbuf, netdev->demux.ule_sndu_outbuf_len);
+    hexdump(netdev->demux.ule_sndu_outbuf, netdev->demux.ule_sndu_outbuf_len);
 
-    struct sk_buff* skb = dev_alloc_skb(netdev->demux.ule_sndu_outbuf_len);
+    skb = dev_alloc_skb(netdev->demux.ule_sndu_outbuf_len);
     //skb_reserve(skb, 2); // align IP on 16B boundary
     memcpy(skb_put(skb, netdev->demux.ule_sndu_outbuf_len), netdev->demux.ule_sndu_outbuf, netdev->demux.ule_sndu_outbuf_len);
     skb->dev = g_netdev;
@@ -168,7 +183,7 @@ else {
     }
 
 next:
-printk(KERN_INFO "schedule read task\n");
+//printk(KERN_INFO "schedule read task\n");
     if (!g_die) {
         queue_delayed_work(g_workqueue, &ReadTask, 50);
     }
@@ -258,12 +273,15 @@ static int dvb_net_tx(struct sk_buff *skb, struct net_device *dev)
     while (encapCtx.snduIndex < encapCtx.snduLen) {
         ule_padding(&encapCtx);
         printk(KERN_INFO "tx snduIndex:%d snduLen:%d", encapCtx.snduIndex, encapCtx.snduLen);
-        //hexdump(encapCtx.tsPkt, 188);
+        hexdump(encapCtx.tsPkt, 188);
 
         len = g_ITEAPI_TxSendTSData(netdev->itdev, encapCtx.tsPkt, 188);
         if (len != 188) {
             printk(KERN_ERR "sendTsData error %ld\n", len);
             return len; //XXX
+        }
+        else {
+            atomic_inc(&g_tx_count);
         }
     }
 
@@ -484,6 +502,8 @@ dvb_netdev* dvb_alloc_netdev(struct it950x_dev* itdev)
 
     ule_initDemuxCtx(&dev->demux);
     dev->demux.pid = 0x1FAF;
+
+    atomic_set(&g_tx_count, 0);
 
 g_itdev = itdev;
 g_workqueue = create_workqueue("workqueue");
