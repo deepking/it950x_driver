@@ -461,7 +461,7 @@ static void dvb_net_setup(struct net_device *dev)
     /* dev->header_ops     = &dvb_header_ops; */
     dev->netdev_ops     = &dvb_netdev_ops;
     /* dev->mtu            = 4096; */
-    /* dev->flags |= IFF_NOARP; */
+    dev->flags |= IFF_NOARP;
 }
 
 dvb_netdev* dvb_alloc_netdev(struct it950x_dev* itdev)
