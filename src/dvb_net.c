@@ -167,7 +167,7 @@ if (!g_netdev)
 netdev = netdev_priv(g_netdev);
 ule_demux(&netdev->demux, buf, len);
 if (netdev->demux.ule_sndu_outbuf) {
-    printk(KERN_INFO "outbuf: len=%d", netdev->demux.ule_sndu_outbuf_len);
+    printk(KERN_INFO "outbuf: len=%d\n", netdev->demux.ule_sndu_outbuf_len);
     //hexdump(netdev->demux.ule_sndu_outbuf, netdev->demux.ule_sndu_outbuf_len);
 
     skb = dev_alloc_skb(netdev->demux.ule_sndu_outbuf_len);
@@ -278,7 +278,7 @@ static int dvb_net_tx(struct sk_buff *skb, struct net_device *dev)
 
     while (encapCtx.snduIndex < encapCtx.snduLen) {
         ule_padding(&encapCtx);
-        printk(KERN_INFO "tx snduIndex:%d snduLen:%d", encapCtx.snduIndex, encapCtx.snduLen);
+        printk(KERN_INFO "tx snduIndex:%d snduLen:%d\n", encapCtx.snduIndex, encapCtx.snduLen);
         //hexdump(encapCtx.tsPkt, 188);
 
         len = g_ITEAPI_TxSendTSData(netdev->itdev, encapCtx.tsPkt, 188);
