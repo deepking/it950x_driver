@@ -1672,7 +1672,7 @@ static int __init it950x_module_init(void)
 	//deb_data("usb_it950x Module is loaded \n");
 
 	if ((result = usb_register(&it950x_driver))) {
-		err("usb_register failed. Error number %d",result);
+		deb_data("usb_register failed. Error number %d",result);
 		return result;
 	}
 	
