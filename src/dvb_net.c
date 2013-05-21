@@ -27,6 +27,7 @@ static void intrpt_sendTask(struct work_struct*);
 
 static int g_die = 0;     /* set this to 1 for shutdown */
 static struct workqueue_struct *g_workqueue = NULL;
+static struct workqueue_struct *g_sendQueue = NULL;
 static DECLARE_DELAYED_WORK(ReadTask, intrpt_readTask);
 static DECLARE_DELAYED_WORK(SendTask, intrpt_sendTask);
 static struct it950x_dev* g_itdev = NULL;
@@ -72,6 +73,12 @@ static void intrpt_sendTask(struct work_struct* work)
     }
 
     count = atomic_read(&g_tx_count);
+    if (count == 0) {
+        // slow
+        if (!g_die)
+            queue_delayed_work(g_sendQueue, &SendTask, 50);
+        return;
+    }
     if (count >= RX_RING_BUF_COUNT) {
         goto next_send;
     }
@@ -90,7 +97,7 @@ next_send:
     // reset counter
     atomic_set(&g_tx_count, 0);
     if (!g_die)
-        queue_delayed_work(g_workqueue, &SendTask, 50);
+        queue_delayed_work(g_sendQueue, &SendTask, 1);
 }
 
 static void intrpt_readTask(struct work_struct* work)
@@ -159,7 +166,7 @@ netdev = netdev_priv(g_netdev);
 ule_demux(&netdev->demux, buf, len);
 if (netdev->demux.ule_sndu_outbuf) {
     printk(KERN_INFO "outbuf: len=%d", netdev->demux.ule_sndu_outbuf_len);
-    hexdump(netdev->demux.ule_sndu_outbuf, netdev->demux.ule_sndu_outbuf_len);
+    //hexdump(netdev->demux.ule_sndu_outbuf, netdev->demux.ule_sndu_outbuf_len);
 
     skb = dev_alloc_skb(netdev->demux.ule_sndu_outbuf_len);
     //skb_reserve(skb, 2); // align IP on 16B boundary
@@ -273,7 +280,7 @@ static int dvb_net_tx(struct sk_buff *skb, struct net_device *dev)
     while (encapCtx.snduIndex < encapCtx.snduLen) {
         ule_padding(&encapCtx);
         printk(KERN_INFO "tx snduIndex:%d snduLen:%d", encapCtx.snduIndex, encapCtx.snduLen);
-        hexdump(encapCtx.tsPkt, 188);
+        //hexdump(encapCtx.tsPkt, 188);
 
         len = g_ITEAPI_TxSendTSData(netdev->itdev, encapCtx.tsPkt, 188);
         if (len != 188) {
@@ -362,7 +369,7 @@ static Dword startTransfer(struct it950x_dev* dev)
         return dwError;
     }
 
-    queue_delayed_work(g_workqueue, &SendTask, 50);
+    queue_delayed_work(g_sendQueue, &SendTask, 50);
 
     return dwError;
 }
@@ -507,6 +514,7 @@ dvb_netdev* dvb_alloc_netdev(struct it950x_dev* itdev)
 
 g_itdev = itdev;
 g_workqueue = create_workqueue("workqueue");
+g_sendQueue = create_workqueue("sendQueue");
 g_netdev = netdev;
 
     return dev;
@@ -518,5 +526,6 @@ void dvb_free_netdev(dvb_netdev* dev)
     it950x_usb_tx_free_dev(dev->itdev);
     it950x_usb_rx_free_dev(dev->itdev);
     destroy_workqueue(g_workqueue);
+    destroy_workqueue(g_sendQueue);
 }
 
