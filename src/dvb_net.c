@@ -21,6 +21,8 @@
 #define MIN(X,Y) (((X) < (Y)) ? : (X) : (Y))
 #define RX_RING_BUF_COUNT 348
 static Byte g_null_packet[188] = {0x47,0x1f,0xff,0x1c,0x00,0x00};
+#define SEND_FREQ 666000
+#define RECV_FREQ 666000
 
 static void intrpt_readTask(struct work_struct*);
 static void intrpt_sendTask(struct work_struct*);
@@ -183,11 +185,8 @@ if (netdev->demux.ule_sndu_outbuf) {
     netdev->demux.ule_sndu_outbuf = NULL;
     netdev->demux.ule_sndu_outbuf_len = 0;
 }
-else {
-    printk("not a packet len=%d", netdev->demux.ule_sndu_outbuf_len);
-}
 
-    }
+    }// end loop
 
 next:
 //printk(KERN_INFO "schedule read task\n");
@@ -203,7 +202,7 @@ void startCapture(struct it950x_dev* dev)
 
     printk(KERN_INFO "%s()\n", __FUNCTION__);
 
-    err = DTV_AcquireChannel(dev, 666000, 8000);
+    err = DTV_AcquireChannel(dev, RECV_FREQ, 8000);
     if (err) {
         printk(KERN_ERR "DTV_AcquireChannel error %ld\n", err);
         return;
@@ -321,7 +320,7 @@ static Dword startTransfer(struct it950x_dev* dev)
 
     printk(KERN_INFO "%s()\n", __FUNCTION__);
 
-    dwError = g_ITEAPI_TxSetChannel(dev, 666000, 8000);
+    dwError = g_ITEAPI_TxSetChannel(dev, SEND_FREQ, 8000);
     if (dwError != Error_NO_ERROR) {
         printk(KERN_ERR "set channel fail %ld\n", dwError);
         return dwError;
@@ -329,16 +328,16 @@ static Dword startTransfer(struct it950x_dev* dev)
 
     req.chip = 0;
     //printf("\n=> Please Input constellation (0:QPSK  1:16QAM  2:64QAM): ");
-    req.constellation = (Byte) 1;
+    req.constellation = (Byte) 2;
 
     //printf("\n=> Please Input Code Rate"); printf(" (0:1/2  1:2/3  2:3/4  3:5/6  4:7/8): ");
-    req.highCodeRate = (Byte) 1;
+    req.highCodeRate = (Byte) 4;
 
     //printf("\n=> Please Input Interval (0:1/32  1:1/16  2:1/8  3:1/4): ");
-    req.interval = (Byte) 3;
+    req.interval = (Byte) 0;
     
     //printf("\n=> Please Input Transmission Mode (0:2K  1:8K): ");
-    req.transmissionMode = (Byte) 1;
+    req.transmissionMode = (Byte) 0;
 
     dwError = g_ITEAPI_TxSetChannelModulation(dev, &req);
     if (dwError != Error_NO_ERROR) {
