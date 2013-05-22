@@ -99,7 +99,7 @@ next_send:
     // reset counter
     atomic_set(&g_tx_count, 0);
     if (!g_die)
-        queue_delayed_work(g_sendQueue, &SendTask, 1);
+        queue_delayed_work(g_sendQueue, &SendTask, 30);
 }
 
 static void intrpt_readTask(struct work_struct* work)
