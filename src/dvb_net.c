@@ -175,6 +175,7 @@ if (netdev->demux.ule_sndu_outbuf) {
     memcpy(skb_put(skb, netdev->demux.ule_sndu_outbuf_len), netdev->demux.ule_sndu_outbuf, netdev->demux.ule_sndu_outbuf_len);
     skb->dev = g_netdev;
     skb->protocol = eth_type_trans(skb, g_netdev);
+    skb->pkt_type = PACKET_HOST;
     //skb->ip_summed = CHECKSUM_UNNECESSARY;
     //skb->pkt_type=PACKET_BROADCAST;
 
