@@ -34,6 +34,7 @@ static DECLARE_DELAYED_WORK(SendTask, intrpt_sendTask);
 static struct it950x_dev* g_itdev = NULL;
 static struct net_device* g_netdev = NULL;
 static atomic_t g_tx_count;
+static dvb_netdev* g_dvb = NULL;
 
 static void hexdump( const unsigned char *buf, unsigned short len )
 {
@@ -68,6 +69,7 @@ static void intrpt_sendTask(struct work_struct* work)
     Byte garbage[188] = {0x47,0x1f,0xff,0x1c, 0x00, 0x00};
     int count;
     int i;
+    unsigned long cpu_flag;
 
     if (!g_itdev) {
         goto next_send;
@@ -76,7 +78,10 @@ static void intrpt_sendTask(struct work_struct* work)
     count = atomic_read(&g_tx_count);
     if (count == 0) {
         // idle
+        spin_lock_irqsave(&g_dvb->tx_lock, cpu_flag);
         dwError = g_ITEAPI_TxSendTSData(g_itdev, garbage, 188);
+        spin_unlock_irqrestore(&g_dvb->tx_lock, cpu_flag);
+
         if (dwError != 188) {
             printk(KERN_ERR "sendTask g_ITEAPI_TxSendTSData %ld\n", dwError);
         }
@@ -86,7 +91,11 @@ static void intrpt_sendTask(struct work_struct* work)
     else if (count >= RX_RING_BUF_COUNT) {
         int remaining = count % RX_RING_BUF_COUNT;
         for (i = RX_RING_BUF_COUNT - remaining; i > 0; i--) {
+
+            spin_lock_irqsave(&g_dvb->tx_lock, cpu_flag);
             dwError = g_ITEAPI_TxSendTSData(g_itdev, garbage, 188);
+            spin_unlock_irqrestore(&g_dvb->tx_lock, cpu_flag);
+
             if (dwError != 188) {
                 printk(KERN_ERR "sendTask g_ITEAPI_TxSendTSData %ld\n", dwError);
                 goto reset_counter;
@@ -95,7 +104,11 @@ static void intrpt_sendTask(struct work_struct* work)
     }
     else {
         for (i = RX_RING_BUF_COUNT - count; i > 0; i--) {
+
+            spin_lock_irqsave(&g_dvb->tx_lock, cpu_flag);
             dwError = g_ITEAPI_TxSendTSData(g_itdev, garbage, 188);
+            spin_unlock_irqrestore(&g_dvb->tx_lock, cpu_flag);
+
             if (dwError != 188) {
                 printk(KERN_ERR "sendTask g_ITEAPI_TxSendTSData %ld\n", dwError);
                 goto reset_counter;
@@ -104,11 +117,11 @@ static void intrpt_sendTask(struct work_struct* work)
     }
 
 reset_counter:
-    atomic_set(&g_tx_count, 0);
+    atomic_sub(count, &g_tx_count);
 
 next_send:
     if (!g_die)
-        queue_delayed_work(g_sendQueue, &SendTask, 30);
+        queue_delayed_work(g_sendQueue, &SendTask, 50);
 }
 
 static void intrpt_readTask(struct work_struct* work)
@@ -279,6 +292,7 @@ static int dvb_net_tx(struct sk_buff *skb, struct net_device *dev)
     ULEEncapCtx encapCtx;
     Dword len = 0;
     int count = 0;
+    unsigned long cpu_flag;
     
     netdev = netdev_priv(dev);
 
@@ -300,7 +314,10 @@ static int dvb_net_tx(struct sk_buff *skb, struct net_device *dev)
         printk(KERN_INFO "tx %d snduIndex:%d snduLen:%d\n", count++, encapCtx.snduIndex, encapCtx.snduLen);
         //hexdump(encapCtx.tsPkt, 188);
 
+        spin_lock_irqsave(&netdev->tx_lock, cpu_flag);
         len = g_ITEAPI_TxSendTSData(netdev->itdev, encapCtx.tsPkt, 188);
+        spin_unlock_irqrestore(&netdev->tx_lock, cpu_flag);
+
         if (len != 188) {
             printk(KERN_ERR "sendTsData error %ld\n", len);
             return len; //XXX
@@ -537,6 +554,7 @@ g_itdev = itdev;
 g_workqueue = create_workqueue("workqueue");
 g_sendQueue = create_workqueue("sendQueue");
 g_netdev = netdev;
+g_dvb = dev;
 
     return dev;
 }
