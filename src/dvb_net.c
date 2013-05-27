@@ -20,9 +20,8 @@
 #include "ule.h"
 #define MIN(X,Y) (((X) < (Y)) ? : (X) : (Y))
 #define RX_RING_BUF_COUNT 348
-static Byte g_null_packet[188] = {0x47,0x1f,0xff,0x1c,0x00,0x00};
 #define SEND_FREQ 666000
-#define RECV_FREQ 666000
+#define RECV_FREQ 533000
 
 static void intrpt_readTask(struct work_struct*);
 static void intrpt_sendTask(struct work_struct*);
@@ -76,28 +75,38 @@ static void intrpt_sendTask(struct work_struct* work)
 
     count = atomic_read(&g_tx_count);
     if (count == 0) {
-        // slow
-        if (!g_die)
-            queue_delayed_work(g_sendQueue, &SendTask, 50);
-        return;
-    }
-    if (count >= RX_RING_BUF_COUNT) {
+        // idle
+        dwError = g_ITEAPI_TxSendTSData(g_itdev, garbage, 188);
+        if (dwError != 188) {
+            printk(KERN_ERR "sendTask g_ITEAPI_TxSendTSData %ld\n", dwError);
+        }
+
         goto next_send;
+    }
+    else if (count >= RX_RING_BUF_COUNT) {
+        int remaining = count % RX_RING_BUF_COUNT;
+        for (i = RX_RING_BUF_COUNT - remaining; i > 0; i--) {
+            dwError = g_ITEAPI_TxSendTSData(g_itdev, garbage, 188);
+            if (dwError != 188) {
+                printk(KERN_ERR "sendTask g_ITEAPI_TxSendTSData %ld\n", dwError);
+                goto reset_counter;
+            }
+        }
     }
     else {
         for (i = RX_RING_BUF_COUNT - count; i > 0; i--) {
             dwError = g_ITEAPI_TxSendTSData(g_itdev, garbage, 188);
             if (dwError != 188) {
                 printk(KERN_ERR "sendTask g_ITEAPI_TxSendTSData %ld\n", dwError);
-                goto next_send;
+                goto reset_counter;
             }
         }
     }
 
-next_send:
-//printk(KERN_INFO "send Task\n");
-    // reset counter
+reset_counter:
     atomic_set(&g_tx_count, 0);
+
+next_send:
     if (!g_die)
         queue_delayed_work(g_sendQueue, &SendTask, 30);
 }
@@ -112,6 +121,7 @@ static void intrpt_readTask(struct work_struct* work)
     int nFailCount = 0;
     dvb_netdev* netdev;
     struct sk_buff* skb;
+    int errRX = NET_RX_SUCCESS;
 
     memset(buf, 0, len);
 
@@ -161,6 +171,10 @@ static void intrpt_readTask(struct work_struct* work)
             continue;
         }
 
+        if (pidFromBuf != 0x1FAF) {
+            continue;
+        }
+
 if (!g_netdev)
     goto next;
 
@@ -179,7 +193,10 @@ if (netdev->demux.ule_sndu_outbuf) {
     //skb->ip_summed = CHECKSUM_UNNECESSARY;
     //skb->pkt_type=PACKET_BROADCAST;
 
-    netif_rx(skb);
+    errRX = netif_rx(skb);
+    if (errRX != NET_RX_SUCCESS) {
+        printk(KERN_WARNING "RxQueue drop packet.\n");
+    }
                 
     // clean & reset outbuf
     kfree(netdev->demux.ule_sndu_outbuf);
@@ -261,6 +278,7 @@ static int dvb_net_tx(struct sk_buff *skb, struct net_device *dev)
     uint32_t totalLength;
     ULEEncapCtx encapCtx;
     Dword len = 0;
+    int count = 0;
     
     netdev = netdev_priv(dev);
 
@@ -279,7 +297,7 @@ static int dvb_net_tx(struct sk_buff *skb, struct net_device *dev)
 
     while (encapCtx.snduIndex < encapCtx.snduLen) {
         ule_padding(&encapCtx);
-        printk(KERN_INFO "tx snduIndex:%d snduLen:%d\n", encapCtx.snduIndex, encapCtx.snduLen);
+        printk(KERN_INFO "tx %d snduIndex:%d snduLen:%d\n", count++, encapCtx.snduIndex, encapCtx.snduLen);
         //hexdump(encapCtx.tsPkt, 188);
 
         len = g_ITEAPI_TxSendTSData(netdev->itdev, encapCtx.tsPkt, 188);
@@ -379,19 +397,16 @@ static int dvb_net_open(struct net_device *dev)
     dvb_netdev* netdev = NULL;
     Dword dwError = 0;
     printk(KERN_INFO "dvbnet open.\n");
-    /* struct dvb_net_priv *priv = netdev_priv(dev); */
 
-    /* priv->in_use++; */
-    /* dvb_net_feed_start(dev); */
-
-    /* memcpy(dev->dev_addr, "\0DVB0", ETH_ALEN); */
-    /* netif_start_queue(dev); */
 
     netdev = netdev_priv(dev);
 
     g_die = 0;
     startTransfer(netdev->itdev);
     startCapture(netdev->itdev);
+
+    // allow upper layers to call the device hard_start_xmit routin.
+    netif_start_queue(dev);
 
     return 0;
 }
@@ -404,6 +419,7 @@ static int dvb_net_stop(struct net_device *dev)
 
     /* priv->in_use--; */
     /* return dvb_net_feed_stop(dev); */
+    netif_stop_queue(dev);
     return 0;
 }
 
@@ -440,6 +456,10 @@ int dvb_do_ioctl(struct net_device *dev, struct ifreq *rq, int cmd)
     return 0;
 }
 
+static void dvb_tx_timeout(struct net_device* dev) {
+    printk(KERN_ERR "dvb_tx_timeout\n");
+}
+
 static const struct net_device_ops dvb_netdev_ops = {
     .ndo_open               = dvb_net_open,
     .ndo_stop               = dvb_net_stop,
@@ -449,6 +469,7 @@ static const struct net_device_ops dvb_netdev_ops = {
     /* .ndo_set_mac_address    = dvb_net_set_mac, */
     /* .ndo_change_mtu         = eth_change_mtu, */
     /* .ndo_set_config         = dvb_config, */
+    .ndo_tx_timeout = dvb_tx_timeout,
 
     // cause SIOCSIFFLAGS: Cannot assign requested address, (ifconfig dvb0 ip)
     /* .ndo_validate_addr      = eth_validate_addr, */
@@ -467,7 +488,7 @@ static void dvb_net_setup(struct net_device *dev)
     ether_setup(dev);
     /* dev->header_ops     = &dvb_header_ops; */
     dev->netdev_ops     = &dvb_netdev_ops;
-    /* dev->mtu            = 4096; */
+    dev->mtu            = 4096;
     dev->flags |= IFF_NOARP;
 }
 
