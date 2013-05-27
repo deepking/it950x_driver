@@ -23,6 +23,9 @@
 #define SEND_FREQ 666000
 #define RECV_FREQ 533000
 
+//#define PDEBUG(fmt, args...) printk(KERN_DEBUG "dvbnet: " fmt, ## args)
+#define PDEBUG(fmt, args...)
+
 static void intrpt_readTask(struct work_struct*);
 static void intrpt_sendTask(struct work_struct*);
 
@@ -194,7 +197,7 @@ if (!g_netdev)
 netdev = netdev_priv(g_netdev);
 ule_demux(&netdev->demux, buf, len);
 if (netdev->demux.ule_sndu_outbuf) {
-    printk(KERN_INFO "outbuf: len=%d\n", netdev->demux.ule_sndu_outbuf_len);
+    PDEBUG("outbuf: len=%d\n", netdev->demux.ule_sndu_outbuf_len);
     //hexdump(netdev->demux.ule_sndu_outbuf, netdev->demux.ule_sndu_outbuf_len);
 
     skb = dev_alloc_skb(netdev->demux.ule_sndu_outbuf_len);
@@ -311,7 +314,7 @@ static int dvb_net_tx(struct sk_buff *skb, struct net_device *dev)
 
     while (encapCtx.snduIndex < encapCtx.snduLen) {
         ule_padding(&encapCtx);
-        printk(KERN_INFO "tx %d snduIndex:%d snduLen:%d\n", count++, encapCtx.snduIndex, encapCtx.snduLen);
+        PDEBUG("tx %d snduIndex:%d snduLen:%d\n", count++, encapCtx.snduIndex, encapCtx.snduLen);
         //hexdump(encapCtx.tsPkt, 188);
 
         spin_lock_irqsave(&netdev->tx_lock, cpu_flag);
