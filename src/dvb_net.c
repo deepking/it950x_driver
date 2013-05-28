@@ -21,13 +21,14 @@
 #define MIN(X,Y) (((X) < (Y)) ? : (X) : (Y))
 #define RX_RING_BUF_COUNT 348
 #define SEND_FREQ 666000
-#define RECV_FREQ 533000
+#define RECV_FREQ 666000
 
 //#define PDEBUG(fmt, args...) printk(KERN_DEBUG "dvbnet: " fmt, ## args)
 #define PDEBUG(fmt, args...)
 
 static void intrpt_readTask(struct work_struct*);
 static void intrpt_sendTask(struct work_struct*);
+static int dvb_net_tx(struct sk_buff*, struct net_device*);
 
 static int g_die = 0;     /* set this to 1 for shutdown */
 static struct workqueue_struct *g_workqueue = NULL;
@@ -73,58 +74,21 @@ static void intrpt_sendTask(struct work_struct* work)
     int count;
     int i;
     unsigned long cpu_flag;
+    struct sk_buff* skb;
 
     if (!g_itdev) {
         goto next_send;
     }
 
-    count = atomic_read(&g_tx_count);
-    if (count == 0) {
-        // idle
-        spin_lock_irqsave(&g_dvb->tx_lock, cpu_flag);
-        dwError = g_ITEAPI_TxSendTSData(g_itdev, garbage, 188);
-        spin_unlock_irqrestore(&g_dvb->tx_lock, cpu_flag);
-
-        if (dwError != 188) {
-            printk(KERN_ERR "sendTask g_ITEAPI_TxSendTSData %ld\n", dwError);
-        }
-
-        goto next_send;
+    for (i = 0; i < 100; i++) {
+        skb = dev_alloc_skb(100);
+        memcpy(skb_put(skb, 6), "hello\n", 6);
+        dvb_net_tx(skb, g_netdev);
     }
-    else if (count >= RX_RING_BUF_COUNT) {
-        int remaining = count % RX_RING_BUF_COUNT;
-        for (i = RX_RING_BUF_COUNT - remaining; i > 0; i--) {
-
-            spin_lock_irqsave(&g_dvb->tx_lock, cpu_flag);
-            dwError = g_ITEAPI_TxSendTSData(g_itdev, garbage, 188);
-            spin_unlock_irqrestore(&g_dvb->tx_lock, cpu_flag);
-
-            if (dwError != 188) {
-                printk(KERN_ERR "sendTask g_ITEAPI_TxSendTSData %ld\n", dwError);
-                goto reset_counter;
-            }
-        }
-    }
-    else {
-        for (i = RX_RING_BUF_COUNT - count; i > 0; i--) {
-
-            spin_lock_irqsave(&g_dvb->tx_lock, cpu_flag);
-            dwError = g_ITEAPI_TxSendTSData(g_itdev, garbage, 188);
-            spin_unlock_irqrestore(&g_dvb->tx_lock, cpu_flag);
-
-            if (dwError != 188) {
-                printk(KERN_ERR "sendTask g_ITEAPI_TxSendTSData %ld\n", dwError);
-                goto reset_counter;
-            }
-        }
-    }
-
-reset_counter:
-    atomic_sub(count, &g_tx_count);
 
 next_send:
     if (!g_die)
-        queue_delayed_work(g_sendQueue, &SendTask, 50);
+        queue_delayed_work(g_sendQueue, &SendTask, 1);
 }
 
 static void intrpt_readTask(struct work_struct* work)
@@ -199,24 +163,26 @@ ule_demux(&netdev->demux, buf, len);
 if (netdev->demux.ule_sndu_outbuf) {
     PDEBUG("outbuf: len=%d\n", netdev->demux.ule_sndu_outbuf_len);
     //hexdump(netdev->demux.ule_sndu_outbuf, netdev->demux.ule_sndu_outbuf_len);
+    g_netdev->stats.rx_bytes += netdev->demux.ule_sndu_outbuf_len;
+    g_netdev->stats.rx_packets++;
 
-    skb = dev_alloc_skb(netdev->demux.ule_sndu_outbuf_len);
-    //skb_reserve(skb, 2); // align IP on 16B boundary
-    memcpy(skb_put(skb, netdev->demux.ule_sndu_outbuf_len), netdev->demux.ule_sndu_outbuf, netdev->demux.ule_sndu_outbuf_len);
-    skb->dev = g_netdev;
-    skb->protocol = eth_type_trans(skb, g_netdev);
-    skb->pkt_type = PACKET_HOST;
+    /* skb = dev_alloc_skb(netdev->demux.ule_sndu_outbuf_len); */
+    /* //skb_reserve(skb, 2); // align IP on 16B boundary */
+    /* memcpy(skb_put(skb, netdev->demux.ule_sndu_outbuf_len), netdev->demux.ule_sndu_outbuf, netdev->demux.ule_sndu_outbuf_len); */
+    /* skb->dev = g_netdev; */
+    /* skb->protocol = eth_type_trans(skb, g_netdev); */
+    /* skb->pkt_type = PACKET_HOST; */
     //skb->ip_summed = CHECKSUM_UNNECESSARY;
     //skb->pkt_type=PACKET_BROADCAST;
 
-    errRX = netif_rx(skb);
-    if (errRX != NET_RX_SUCCESS) {
-        g_netdev->stats.rx_errors++;
-        printk(KERN_WARNING "RxQueue drop packet.\n");
-    }
-    else {
-        g_netdev->stats.rx_packets++;
-    }
+    /* errRX = netif_rx(skb); */
+    /* if (errRX != NET_RX_SUCCESS) { */
+    /*     g_netdev->stats.rx_errors++; */
+    /*     printk(KERN_WARNING "RxQueue drop packet.\n"); */
+    /* } */
+    /* else { */
+    /*     g_netdev->stats.rx_packets++; */
+    /* } */
                 
     // clean & reset outbuf
     kfree(netdev->demux.ule_sndu_outbuf);
@@ -291,6 +257,12 @@ void stopCapture(void)
     }
 }
 
+static int dvb_net_tx_fake(struct sk_buff *skb, struct net_device *dev)
+{
+    /* NOP */
+    return NETDEV_TX_OK;
+}
+
 static int dvb_net_tx(struct sk_buff *skb, struct net_device *dev)
 {
     dvb_netdev* netdev;
@@ -316,14 +288,13 @@ static int dvb_net_tx(struct sk_buff *skb, struct net_device *dev)
     encapCtx.snduPkt = pkt;
     encapCtx.snduLen = totalLength;
 
+    spin_lock_irqsave(&netdev->tx_lock, cpu_flag);
     while (encapCtx.snduIndex < encapCtx.snduLen) {
         ule_padding(&encapCtx);
         PDEBUG("tx %d snduIndex:%d snduLen:%d\n", count++, encapCtx.snduIndex, encapCtx.snduLen);
         //hexdump(encapCtx.tsPkt, 188);
 
-        spin_lock_irqsave(&netdev->tx_lock, cpu_flag);
         len = g_ITEAPI_TxSendTSData(netdev->itdev, encapCtx.tsPkt, 188);
-        spin_unlock_irqrestore(&netdev->tx_lock, cpu_flag);
 
         if (len != 188) {
             printk(KERN_ERR "sendTsData error %ld\n", len);
@@ -336,6 +307,7 @@ static int dvb_net_tx(struct sk_buff *skb, struct net_device *dev)
             dev->stats.tx_bytes += 188;
         }
     }
+    spin_unlock_irqrestore(&netdev->tx_lock, cpu_flag);
 
     return NETDEV_TX_OK;
 }
@@ -442,10 +414,6 @@ static int dvb_net_stop(struct net_device *dev)
 {
     printk(KERN_INFO "dvbnet stop.\n");
     stopCapture();
-    /* struct dvb_net_priv *priv = netdev_priv(dev); */
-
-    /* priv->in_use--; */
-    /* return dvb_net_feed_stop(dev); */
     netif_stop_queue(dev);
     return 0;
 }
@@ -490,7 +458,7 @@ static void dvb_tx_timeout(struct net_device* dev) {
 static const struct net_device_ops dvb_netdev_ops = {
     .ndo_open               = dvb_net_open,
     .ndo_stop               = dvb_net_stop,
-    .ndo_start_xmit         = dvb_net_tx,
+    .ndo_start_xmit         = dvb_net_tx_fake,
     /* .ndo_do_ioctl           = dvb_do_ioctl, */
     /* .ndo_set_rx_mode        = dvb_net_set_multicast_list, */
     /* .ndo_set_mac_address    = dvb_net_set_mac, */
