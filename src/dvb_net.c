@@ -211,11 +211,11 @@ if (netdev->demux.ule_sndu_outbuf) {
 
     errRX = netif_rx(skb);
     if (errRX != NET_RX_SUCCESS) {
-        dev->stats.rx_erros++;
+        g_netdev->stats.rx_errors++;
         printk(KERN_WARNING "RxQueue drop packet.\n");
     }
     else {
-        dev->stats.rx_packets++;
+        g_netdev->stats.rx_packets++;
     }
                 
     // clean & reset outbuf
