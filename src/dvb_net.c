@@ -211,7 +211,11 @@ if (netdev->demux.ule_sndu_outbuf) {
 
     errRX = netif_rx(skb);
     if (errRX != NET_RX_SUCCESS) {
+        dev->stats.rx_erros++;
         printk(KERN_WARNING "RxQueue drop packet.\n");
+    }
+    else {
+        dev->stats.rx_packets++;
     }
                 
     // clean & reset outbuf
@@ -323,10 +327,13 @@ static int dvb_net_tx(struct sk_buff *skb, struct net_device *dev)
 
         if (len != 188) {
             printk(KERN_ERR "sendTsData error %ld\n", len);
+            dev->stats.tx_errors++;
             return len; //XXX
         }
         else {
             atomic_inc(&g_tx_count);
+            dev->stats.tx_packets++;
+            dev->stats.tx_bytes += 188;
         }
     }
 
