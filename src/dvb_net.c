@@ -8,6 +8,7 @@
 #include <linux/etherdevice.h>
 #include <linux/ip.h>          /* struct iphdr */
 #include <linux/ctype.h>
+#include <linux/delay.h>
 
 #include <linux/workqueue.h>    /* We scheduale tasks here */
 #include <linux/sched.h>        /* We need to put ourselves to sleep 
@@ -29,36 +30,11 @@
 
 static void intrpt_readTask(struct work_struct*);
 static void intrpt_sendTask(struct work_struct*);
+static void schedule_read_task(dvb_netdev*, int);
+static void schedule_send_task(dvb_netdev*, int);
+static void hexdump(const unsigned char *, unsigned short);
 
-static int g_die = 0;     /* set this to 1 for shutdown */
 static atomic_t g_tx_count;
-
-static void hexdump( const unsigned char *buf, unsigned short len )
-{
-    char str[80], octet[10];
-    int ofs, i, l;
-
-    for (ofs = 0; ofs < len; ofs += 16) {
-        sprintf( str, "%03d: ", ofs );
-
-        for (i = 0; i < 16; i++) {
-            if ((i + ofs) < len)
-                sprintf( octet, "%02x ", buf[ofs + i] );
-            else
-                strcpy( octet, "   " );
-
-            strcat( str, octet );
-        }
-        strcat( str, "  " );
-        l = strlen( str );
-
-        for (i = 0; (i < 16) && ((i + ofs) < len); i++)
-            str[l++] = isprint( buf[ofs + i] ) ? buf[ofs + i] : '.';
-
-        str[l] = '\0';
-        printk( KERN_WARNING "%s\n", str );
-    }
-}
 
 static void intrpt_sendTask(struct work_struct* work)
 {
@@ -84,54 +60,52 @@ static void intrpt_sendTask(struct work_struct* work)
         dvb->netdev->stats.tx_carrier_errors++;
 
         if (dwError != 188) {
-            printk(KERN_ERR "sendTask g_ITEAPI_TxSendTSData %ld\n", dwError);
+            printk(KERN_ERR "ERROR: sendTask g_ITEAPI_TxSendTSData %ld\n", dwError);
         }
-
-        goto next_send;
     }
     else if (count >= RX_RING_BUF_COUNT) {
         int remaining = count % RX_RING_BUF_COUNT;
+        count = count - remaining;
+        /*
+        spin_lock_irqsave(&dvb->tx_lock, cpu_flag);
         for (i = RX_RING_BUF_COUNT - remaining; i > 0; i--) {
 
-            spin_lock_irqsave(&dvb->tx_lock, cpu_flag);
             dwError = g_ITEAPI_TxSendTSData(dvb->itdev, garbage, 188);
-            spin_unlock_irqrestore(&dvb->tx_lock, cpu_flag);
 
             dvb->netdev->stats.tx_carrier_errors++;
 
             if (dwError != 188) {
-                printk(KERN_ERR "sendTask g_ITEAPI_TxSendTSData %ld\n", dwError);
-                goto reset_counter;
+                printk(KERN_ERR "ERROR: sendTask g_ITEAPI_TxSendTSData %ld\n", dwError);
+                break;
             }
         }
+        spin_unlock_irqrestore(&dvb->tx_lock, cpu_flag);
+        */
     }
     else {
+        spin_lock_irqsave(&dvb->tx_lock, cpu_flag);
         for (i = RX_RING_BUF_COUNT - count; i > 0; i--) {
 
-            spin_lock_irqsave(&dvb->tx_lock, cpu_flag);
             dwError = g_ITEAPI_TxSendTSData(dvb->itdev, garbage, 188);
-            spin_unlock_irqrestore(&dvb->tx_lock, cpu_flag);
 
             dvb->netdev->stats.tx_carrier_errors++;
 
             if (dwError != 188) {
-                printk(KERN_ERR "sendTask g_ITEAPI_TxSendTSData %ld\n", dwError);
-                goto reset_counter;
+                printk(KERN_ERR "ERROR: sendTask g_ITEAPI_TxSendTSData %ld\n", dwError);
+                break;
             }
         }
+        spin_unlock_irqrestore(&dvb->tx_lock, cpu_flag);
     }
 
-reset_counter:
     atomic_sub(count, &g_tx_count);
 
-next_send:
-    if (!g_die && dvb)
-        queue_delayed_work(dvb->tx_queue, &dvb->tx_send_task, 50);
+    schedule_send_task(dvb, 100);
 }
 
 static void intrpt_readTask(struct work_struct* work)
 {
-    Dword len = 188;
+    const Dword len = 188;
     Dword err = 0;
     Byte buf[len];
     Dword r;
@@ -147,22 +121,15 @@ static void intrpt_readTask(struct work_struct* work)
     dwork = to_delayed_work(work);
     dvb = container_of(dwork, dvb_netdev, rx_read_task);
 
-    while (true) {
+    while (dvb->rx_run) {
         memset(buf, 0, len);
         r = len;
         err = DTV_GetData(dvb->itdev, buf, &r);
 
-        if (r<=0 || r != 188) {
-            //printk(KERN_ERR "ERROR: only read %lu\n", r);
-            goto next;
+        if (r<=0 || r != len) {
+            msleep(10);
+            continue;
         }
-
-        /*
-        if (err) {
-            printk(KERN_ERR "ERROR: DTV_GetData() %lu\n", err);
-            goto next;
-        }
-        */
 
         if (buf[0] != 0x47) {
             //printk(KERN_INFO "desync (%x, %x, %x, %x) - %lu\n", buf[0], buf[1], buf[2], buf[3], r);
@@ -180,21 +147,29 @@ static void intrpt_readTask(struct work_struct* work)
             DTV_GetData(dvb->itdev, buf+1, &r);
             if (r != 187) {
                 printk(KERN_ERR "sync error read %lu", r);
-                continue;
+                goto next;
             }
-            continue;
         }
 
         pidFromBuf = ts_getPID(buf);
         if (pidFromBuf == 0x1FFF) {
+            dvb->netdev->stats.rx_frame_errors++;
             continue;
         }
 
         if (pidFromBuf != 0x1FAF) {
+            dvb->netdev->stats.rx_frame_errors++;
             continue;
         }
 
         ule_demux(&dvb->demux, buf, len);
+
+        // update stats
+        dvb->netdev->stats.rx_errors += dvb->demux.rx_errors;
+        dvb->netdev->stats.rx_frame_errors += dvb->demux.rx_frame_errors;
+        dvb->netdev->stats.rx_crc_errors += dvb->demux.rx_crc_errors;
+        dvb->netdev->stats.rx_dropped += dvb->demux.rx_dropped;
+
         if (dvb->demux.ule_sndu_outbuf) {
             PDEBUG("outbuf: len=%d\n", dvb->demux.ule_sndu_outbuf_len);
             //hexdump(dvb->demux.ule_sndu_outbuf, dvb->demux.ule_sndu_outbuf_len);
@@ -204,12 +179,12 @@ static void intrpt_readTask(struct work_struct* work)
             skb->dev = dvb->netdev;
             skb->protocol = eth_type_trans(skb, dvb->netdev);
             skb->pkt_type = PACKET_HOST;
-            //skb->ip_summed = CHECKSUM_UNNECESSARY;
+            skb->ip_summed = CHECKSUM_UNNECESSARY;
 
             errRX = netif_rx(skb);
             if (errRX != NET_RX_SUCCESS) {
-                dvb->netdev->stats.rx_errors++;
-                printk(KERN_WARNING "RxQueue drop packet.\n");
+                dvb->netdev->stats.rx_dropped++;
+                printk(KERN_ERR "ERROR: RxQueue drop packet.\n");
             }
             else {
                 dvb->netdev->stats.rx_packets++;
@@ -228,12 +203,10 @@ static void intrpt_readTask(struct work_struct* work)
     }// end loop
 
 next:
-    if (!g_die && dvb) {
-        queue_delayed_work(dvb->rx_queue, &dvb->rx_read_task, 50);
-    }
+    schedule_read_task(dvb, 50);
 }
 
-void startCapture(dvb_netdev* dvb)
+static void startCapture(dvb_netdev* dvb)
 {
     Dword err = 0;
     Bool bLocked = false;
@@ -280,17 +253,53 @@ void startCapture(dvb_netdev* dvb)
         return;
     }
 
-    queue_delayed_work(dvb->rx_queue, &dvb->rx_read_task, 100);
+    dvb->rx_run = true;
+
+    // init timer
+    dvb->rx_queue = create_singlethread_workqueue("readQueue"); 
+    INIT_DELAYED_WORK(&dvb->rx_read_task, intrpt_readTask);
+
+    // start timer
+    schedule_read_task(dvb, 10);
 
     printk(KERN_INFO "dvbnet startCapture ok!\n");
 }
 
-void stopCapture(dvb_netdev* dvb)
+static void schedule_read_task(dvb_netdev* dvb, int ms)
 {
+    unsigned long flag;
+
     if (dvb == NULL)
         return;
 
-    g_die = 1;// XXX
+    if (!dvb->rx_run)
+        return;
+
+    spin_lock_irqsave(&dvb->rx_lock, flag);
+    if (dvb->rx_queue)
+        queue_delayed_work(dvb->rx_queue, &dvb->rx_read_task, ms);
+    spin_unlock_irqrestore(&dvb->rx_lock, flag);
+}
+
+static void stopCapture(dvb_netdev* dvb)
+{
+    unsigned long flag;
+
+    if (dvb == NULL)
+        return;
+
+    dvb->rx_run = false;
+
+    // release queue
+    spin_lock_irqsave(&dvb->rx_lock, flag);
+
+    if (dvb->rx_queue) {
+        cancel_delayed_work(&dvb->rx_read_task);
+        destroy_workqueue(dvb->rx_queue);
+        dvb->rx_queue = NULL;
+    }
+
+    spin_unlock_irqrestore(&dvb->rx_lock, flag);
 
     if (dvb->itdev) {
         DTV_StopCapture(dvb->itdev);
@@ -299,6 +308,7 @@ void stopCapture(dvb_netdev* dvb)
 
 static int dvb_net_tx(struct sk_buff *skb, struct net_device *dev)
 {
+    int ret = NETDEV_TX_OK;
     dvb_netdev* netdev;
     SNDUInfo snduinfo;
     uint32_t totalLength;
@@ -322,19 +332,20 @@ static int dvb_net_tx(struct sk_buff *skb, struct net_device *dev)
     encapCtx.snduPkt = pkt;
     encapCtx.snduLen = totalLength;
 
+    spin_lock_irqsave(&netdev->tx_lock, cpu_flag);
     while (encapCtx.snduIndex < encapCtx.snduLen) {
         ule_padding(&encapCtx);
         PDEBUG("tx %d snduIndex:%d snduLen:%d\n", count++, encapCtx.snduIndex, encapCtx.snduLen);
         //hexdump(encapCtx.tsPkt, 188);
 
-        spin_lock_irqsave(&netdev->tx_lock, cpu_flag);
         len = g_ITEAPI_TxSendTSData(netdev->itdev, encapCtx.tsPkt, 188);
-        spin_unlock_irqrestore(&netdev->tx_lock, cpu_flag);
 
         if (len != 188) {
             printk(KERN_ERR "sendTsData error %ld\n", len);
             dev->stats.tx_errors++;
-            return len; //XXX
+            // TODO
+            // ret = NETDEV_TX_???;
+            break;
         }
         else {
             atomic_inc(&g_tx_count);
@@ -342,8 +353,9 @@ static int dvb_net_tx(struct sk_buff *skb, struct net_device *dev)
             dev->stats.tx_bytes += 188;
         }
     }
+    spin_unlock_irqrestore(&netdev->tx_lock, cpu_flag);
 
-    return NETDEV_TX_OK;
+    return ret;
 }
 
 static void dvb_net_set_multicast_list (struct net_device *dev)
@@ -367,6 +379,7 @@ static int dvb_net_set_mac (struct net_device *dev, void *p)
 
 static Dword startTransfer(dvb_netdev* dvb)
 {
+    int i;
     Dword dwError = 0;
     struct it950x_dev* dev;
     SetModuleRequest req;
@@ -416,14 +429,75 @@ static Dword startTransfer(dvb_netdev* dvb)
         return dwError;
     }
     */
+    /* disable custom packet timer */
+    for (i = 1; i <= 5; i++) {
+        dwError = g_ITEAPI_TxSetPeridicCustomPacketTimer(dev, i, 0);
+        if (dwError != Error_NO_ERROR) {
+            printk(KERN_ERR "g_ITEAPI_TxSetFwPSITableTimer  %d fail\n", 1);
+
+            /* reset error code */
+            dwError = Error_NO_ERROR;
+        }
+    }
 
     dwError = g_ITEAPI_StartTransfer(dev);
     if (dwError != Error_NO_ERROR) {
-        printk(KERN_ERR "startTransfer %ld\n", dwError);
+        printk(KERN_ERR "startTransfer error %ld\n", dwError);
         return dwError;
     }
 
+    dvb->tx_run = true;
+
+    // init timer
+    dvb->tx_queue = create_singlethread_workqueue("sendQueue");
+    INIT_DELAYED_WORK(&dvb->tx_send_task, intrpt_sendTask);
+
+    // start timer
     queue_delayed_work(dvb->tx_queue, &dvb->tx_send_task, 50);
+
+    return dwError;
+}
+
+static void schedule_send_task(dvb_netdev* dvb, int ms)
+{
+    unsigned long flag;
+    
+    if (dvb == NULL)
+        return;
+
+    if (!dvb->tx_run)
+        return;
+
+    spin_lock_irqsave(&dvb->tx_lock, flag);
+    if (dvb->tx_queue)
+        queue_delayed_work(dvb->tx_queue, &dvb->tx_send_task, ms);
+    spin_unlock_irqrestore(&dvb->tx_lock, flag);
+}
+
+static Dword stopTransfer(dvb_netdev* dvb)
+{
+    Dword dwError = 0;
+    unsigned long flag;
+
+    if (dvb == NULL)
+        return dwError;
+
+    dvb->tx_run = false;
+
+    // release queue
+    spin_lock_irqsave(&dvb->tx_lock, flag);
+    if (dvb->tx_queue) {
+        cancel_delayed_work(&dvb->tx_send_task);
+        destroy_workqueue(dvb->tx_queue);
+        dvb->tx_queue = NULL;
+    }
+    spin_unlock_irqrestore(&dvb->tx_lock, flag);
+
+    dwError = g_ITEAPI_StopTransfer(dvb->itdev);
+    if (dwError != Error_NO_ERROR) {
+        printk(KERN_ERR "stopTransfer error %ld\n", dwError);
+        return dwError;
+    }
 
     return dwError;
 }
@@ -436,7 +510,6 @@ static int dvb_net_open(struct net_device *dev)
     printk(KERN_INFO "dvbnet open.\n");
     dvb = netdev_priv(dev);
 
-    g_die = 0;
     startTransfer(dvb);
     startCapture(dvb);
 
@@ -451,6 +524,7 @@ static int dvb_net_stop(struct net_device *dev)
     dvb_netdev* dvb;
 
     dvb = netdev_priv(dev);
+    stopTransfer(dvb);
     stopCapture(dvb);
 
     // disallow upper layers to call the device hard_start_xmit routin.
@@ -488,7 +562,7 @@ static int dvb_config(struct net_device *dev, struct ifmap *map)
 /*
  * Ioctl commands 
  */
-int dvb_do_ioctl(struct net_device *dev, struct ifreq *rq, int cmd)
+static int dvb_do_ioctl(struct net_device *dev, struct ifreq *rq, int cmd)
 {
     printk(KERN_DEBUG "dvbnet ioctl\n");
     return 0;
@@ -565,17 +639,10 @@ dvb_netdev* dvb_alloc_netdev(struct it950x_dev* itdev)
         return NULL;
     }
 
-
     ule_initDemuxCtx(&dev->demux);
     dev->demux.pid = 0x1FAF;
 
     atomic_set(&g_tx_count, 0);// XXX
-
-    dev->tx_queue = create_workqueue("sendQueue");
-    INIT_DELAYED_WORK(&dev->tx_send_task, intrpt_sendTask);
-
-    dev->rx_queue = create_workqueue("readQueue"); 
-    INIT_DELAYED_WORK(&dev->rx_read_task, intrpt_readTask);
 
     return dev;
 }
@@ -585,16 +652,8 @@ void dvb_free_netdev(dvb_netdev* dev)
     if (dev == NULL)
         return;
 
-    g_die = 1;
-
-    if (dev->tx_queue) {
-        destroy_workqueue(dev->tx_queue);
-        dev->tx_queue = NULL;
-    }
-    if (dev->rx_queue) {
-        destroy_workqueue(dev->rx_queue);
-        dev->rx_queue = NULL;
-    }
+    stopTransfer(dev);
+    stopCapture(dev);
 
     if (dev->itdev) {
         it950x_usb_tx_free_dev(dev->itdev);
@@ -603,9 +662,35 @@ void dvb_free_netdev(dvb_netdev* dev)
     }
     
     if (dev->netdev) {
+        netif_stop_queue(dev->netdev);
         unregister_netdev(dev->netdev);
-        //FIXME
-        //free_netdev(dev->netdev);
+        free_netdev(dev->netdev);
     }
 }
 
+static void hexdump( const unsigned char *buf, unsigned short len )
+{
+    char str[80], octet[10];
+    int ofs, i, l;
+
+    for (ofs = 0; ofs < len; ofs += 16) {
+        sprintf( str, "%03d: ", ofs );
+
+        for (i = 0; i < 16; i++) {
+            if ((i + ofs) < len)
+                sprintf( octet, "%02x ", buf[ofs + i] );
+            else
+                strcpy( octet, "   " );
+
+            strcat( str, octet );
+        }
+        strcat( str, "  " );
+        l = strlen( str );
+
+        for (i = 0; (i < 16) && ((i + ofs) < len); i++)
+            str[l++] = isprint( buf[ofs + i] ) ? buf[ofs + i] : '.';
+
+        str[l] = '\0';
+        printk( KERN_WARNING "%s\n", str );
+    }
+}
