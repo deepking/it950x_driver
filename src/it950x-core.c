@@ -1620,6 +1620,9 @@ static void it950x_disconnect(struct usb_interface *intf)
 	mutex_unlock(&it950x_urb_kill);
 #endif
 
+        if (dev && dev->dvbdev) {
+            dvb_free_netdev(dev->dvbdev);
+        }
 	tx_free_urbs(dev);
 //	rx_free_urbs(dev);
 	
@@ -1642,9 +1645,6 @@ static void it950x_disconnect(struct usb_interface *intf)
 	if (dev){
 		if(dev->file) dev->file->private_data = NULL;
 		if(dev->tx_file) dev->tx_file->private_data = NULL;
-		if (dev->dvbdev) {
-                    dvb_free_netdev(dev->dvbdev);
-                }
 		kfree(dev);
 	}
 	
