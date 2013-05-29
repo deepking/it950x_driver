@@ -3,17 +3,24 @@
 
 #include <linux/netdevice.h>
 #include <linux/spinlock.h>
-#include <asm/atomic.h>
+#include <linux/workqueue.h>
+
 #include "ule.h"
 
+/* define in src/it950x_core.c */
 struct it950x_dev;
 
 typedef struct dvb_netdev {
     struct it950x_dev* itdev;
     struct net_device* netdev;
     ULEDemuxCtx demux;
-    atomic_t tx_count;
+
     spinlock_t tx_lock;
+    struct workqueue_struct* tx_queue;
+    struct delayed_work tx_send_task;
+
+    struct workqueue_struct* rx_queue;
+    struct delayed_work rx_read_task;
 } dvb_netdev;
 
 extern dvb_netdev* dvb_alloc_netdev(struct it950x_dev*);
