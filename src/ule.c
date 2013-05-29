@@ -90,7 +90,7 @@ int ule_padding(ULEEncapCtx* ctx)
         remaining--;
         pp++;
     }
-    maxLen = min(ctx->snduLen - ctx->snduIndex, remaining);
+    maxLen = min(ctx->snduLen - ctx->snduIndex, (uint32_t) remaining);
     memcpy((void*) pp, (void*) (ctx->snduPkt + ctx->snduIndex), maxLen);
     ctx->snduIndex += maxLen; // inc sndu index
 
@@ -101,13 +101,6 @@ int ule_padding(ULEEncapCtx* ctx)
     }
     return 0;
 }
-
-int ule_packing()
-{
-    // TODO
-    return 0;
-}
-
 
 /** Prepare for a new ULE SNDU: reset the decoder state. */
 static inline void reset_ule(ULEDemuxCtx *p)
@@ -385,13 +378,14 @@ void ule_demux(ULEDemuxCtx* priv , const unsigned char *buf, size_t buf_len)
             //const uint8_t *tail;
 
             uint32_t ule_crc = ~0L, expected_crc = ~0L;
+            unsigned char uleHeader[4];
+
             if (priv->ule_dbit) {
                 /* Set D-bit for CRC32 verification,
                  * if it was set originally. */
                 ulen |= htons(0x8000);
             }
 
-            unsigned char uleHeader[4];
             *((uint16_t*) uleHeader) = ulen;
             *((uint16_t*) (uleHeader + 2)) = utype;
 
