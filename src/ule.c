@@ -148,9 +148,8 @@ void ule_demux(ULEDemuxCtx* priv , const unsigned char *buf, size_t buf_len)
                 if (priv->ule_skb) {
                     xfree( priv->ule_skb );
                     /* Prepare for next SNDU. */
-
-                    priv->rx_errors++;
                 }
+                priv->rx_errors++;
                 reset_ule(priv);
                 priv->need_pusi = 1;
 
@@ -203,8 +202,8 @@ void ule_demux(ULEDemuxCtx* priv , const unsigned char *buf, size_t buf_len)
                     /* Prepare for next SNDU. */
                     // reset_ule(priv);  moved to below.
 
-                    priv->rx_errors++;
                 }
+                priv->rx_errors++;
                 reset_ule(priv);
                 /* skip to next PUSI. */
                 priv->need_pusi = 1;
@@ -246,9 +245,7 @@ void ule_demux(ULEDemuxCtx* priv , const unsigned char *buf, size_t buf_len)
                 if (priv->ule_sndu_remain > 183) {
                     /* Current SNDU lacks more data than there could be available in the
                      * current TS cell. */
-                    //TODO: error rate
-                    //dev->stats.rx_errors++;
-                    //dev->stats.rx_length_errors++;
+                    priv->rx_errors++;
                     printk(KERN_WARNING "%lu: Expected %d more SNDU bytes, but "
                             "got PUSI (pf %d, ts_remain %d).  Flushing incomplete payload.\n",
                             priv->ts_count, priv->ule_sndu_remain, ts[4], ts_remain);
