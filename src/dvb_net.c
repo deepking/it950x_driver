@@ -585,6 +585,8 @@ void dvb_free_netdev(dvb_netdev* dev)
     if (dev == NULL)
         return;
 
+    g_die = 1;
+
     if (dev->tx_queue) {
         destroy_workqueue(dev->tx_queue);
         dev->tx_queue = NULL;
