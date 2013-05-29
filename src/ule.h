@@ -61,6 +61,11 @@ typedef struct {
 
     unsigned char *ule_sndu_outbuf;
     unsigned short ule_sndu_outbuf_len;
+
+    int rx_errors;
+    int rx_frame_errors;
+    int rx_crc_errors;
+    int rx_dropped;
 } ULEDemuxCtx;
 
 static inline void ule_initEncapCtx(ULEEncapCtx* ctx)
@@ -72,6 +77,14 @@ static inline void ule_initEncapCtx(ULEEncapCtx* ctx)
     ctx->snduLen = 0;
     ctx->snduPkt = NULL;
     ctx->snduIndex = 0;
+}
+
+static inline void ule_resetStats(ULEDemuxCtx* p)
+{
+    p->rx_errors = 0;
+    p->rx_frame_errors = 0;
+    p->rx_crc_errors = 0;
+    p->rx_dropped = 0;
 }
 
 static inline void ule_initDemuxCtx(ULEDemuxCtx* p)
@@ -92,6 +105,8 @@ static inline void ule_initDemuxCtx(ULEDemuxCtx* p)
 
     p->ule_sndu_outbuf = NULL;
     p->ule_sndu_outbuf_len = 0;
+
+    ule_resetStats(p);
 }
 
 /**

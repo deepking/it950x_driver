@@ -29,6 +29,8 @@ static const uint16_t SNDUTypeValue[] = {
 #define LOG_ERR     "[ERROR] "
 #define LOG_INFO    "[INFO ] "
 
+static void hexdump( const unsigned char *buf, unsigned short len );
+
 static inline void* xmalloc(size_t size)
 {
     return kmalloc(size, GFP_KERNEL);
@@ -127,6 +129,8 @@ void ule_demux(ULEDemuxCtx* priv , const unsigned char *buf, size_t buf_len)
     //struct ethhdr *ethh = NULL;
     bool error = false;
 
+    ule_resetStats(priv);
+
     /* For all TS cells in current buffer.
      * Appearently, we are called for every single TS cell.
      */
@@ -144,9 +148,8 @@ void ule_demux(ULEDemuxCtx* priv , const unsigned char *buf, size_t buf_len)
                 if (priv->ule_skb) {
                     xfree( priv->ule_skb );
                     /* Prepare for next SNDU. */
-                    // TODO: error rate
-                    //dev->stats.rx_errors++;
-                    //dev->stats.rx_frame_errors++;
+
+                    priv->rx_errors++;
                 }
                 reset_ule(priv);
                 priv->need_pusi = 1;
@@ -200,9 +203,7 @@ void ule_demux(ULEDemuxCtx* priv , const unsigned char *buf, size_t buf_len)
                     /* Prepare for next SNDU. */
                     // reset_ule(priv);  moved to below.
 
-                    //TODO: error rate
-                    //dev->stats.rx_errors++;
-                    //dev->stats.rx_frame_errors++;
+                    priv->rx_errors++;
                 }
                 reset_ule(priv);
                 /* skip to next PUSI. */
@@ -227,9 +228,7 @@ void ule_demux(ULEDemuxCtx* priv , const unsigned char *buf, size_t buf_len)
                         }
 
                         if (error || priv->ule_sndu_remain) {
-                            //TODO: error rate
-                            //dev->stats.rx_errors++;
-                            //dev->stats.rx_frame_errors++;
+                            priv->rx_errors++;
                             error = false;
                         }
 
@@ -292,9 +291,7 @@ void ule_demux(ULEDemuxCtx* priv , const unsigned char *buf, size_t buf_len)
                 if (priv->ule_sndu_len < 5) {
                     printk(KERN_WARNING "%lu: Invalid ULE SNDU length %u. "
                             "Resyncing.\n", priv->ts_count, priv->ule_sndu_len);
-                    //TODO: error rate
-                    //dev->stats.rx_errors++;
-                    //dev->stats.rx_length_errors++;
+                    priv->rx_errors++;
                     priv->ule_sndu_len = 0;
                     priv->need_pusi = 1;
                     new_ts = 1;
@@ -350,8 +347,7 @@ void ule_demux(ULEDemuxCtx* priv , const unsigned char *buf, size_t buf_len)
             priv->ule_skb = xmalloc(priv->ule_sndu_len);
             if (priv->ule_skb == NULL) {
                 printk(KERN_INFO "Memory squeeze, dropping packet.\n");
-                //TODO: error rate
-                //dev->stats.rx_dropped++;
+                priv->rx_dropped++;
                 return;
             }
 
@@ -400,9 +396,9 @@ void ule_demux(ULEDemuxCtx* priv , const unsigned char *buf, size_t buf_len)
                 printk(KERN_WARNING "%lu: CRC32 check FAILED: %08x / %08x, SNDU len %d type %#x, ts_remain %d, next 2: %x.\n",
                         priv->ts_count, ule_crc, expected_crc, priv->ule_sndu_len, priv->ule_sndu_type, ts_remain, ts_remain > 2 ? *(unsigned short *)from_where : 0);
 
-                //TODO: error rate
-                //dev->stats.rx_errors++;
-                //dev->stats.rx_crc_errors++;
+                priv->rx_errors++;
+                priv->rx_crc_errors++;
+                hexdump(buf, buf_len);
                 xfree(priv->ule_skb);
             } else {
                 /* CRC32 verified OK. */
@@ -472,7 +468,6 @@ void ule_resetDemuxCtx(ULEDemuxCtx* p)
     p->ule_sndu_outbuf_len = 0;
 }
 
-/*
 static void hexdump( const unsigned char *buf, unsigned short len ){
     char str[80], octet[10];
     int ofs, i, l;
@@ -494,4 +489,3 @@ static void hexdump( const unsigned char *buf, unsigned short len ){
     }
 }
 
-*/
