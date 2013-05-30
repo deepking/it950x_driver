@@ -355,6 +355,7 @@ static int dvb_net_tx(struct sk_buff *skb, struct net_device *dev)
     }
     spin_unlock_irqrestore(&netdev->tx_lock, cpu_flag);
 
+    dev_kfree_skb(skb);
     return ret;
 }
 
