@@ -14,19 +14,26 @@
 #include <linux/sched.h>        /* We need to put ourselves to sleep 
                                    and wake up later */
 #include <linux/slab.h>
-#include <asm/atomic.h>
 
 #include "dvb_net.h"
 #include "dvb_api.h"
 #include "error.h"
 #include "ule.h"
-#define MIN(X,Y) (((X) < (Y)) ? : (X) : (Y))
+
+#define TS_SZ 188
 #define RX_RING_BUF_COUNT 348
+
 #define SEND_FREQ 666000
 #define RECV_FREQ 666000
 
+/* timer millis */
+#define TX_SEND_PERIOD 50
+#define RX_RECV_PERIOD 50
+
 //#define PDEBUG(fmt, args...) printk(KERN_DEBUG "dvbnet: " fmt, ## args)
 #define PDEBUG(fmt, args...)
+#define PINFO(fmt, args...) printk(KERN_INFO fmt, ## args) 
+#define PERROR(fmt, args...) printk(KERN_ERR "dvb_error: " fmt, ## args)
 
 static void intrpt_readTask(struct work_struct*);
 static void intrpt_sendTask(struct work_struct*);
@@ -34,12 +41,10 @@ static void schedule_read_task(dvb_netdev*, int);
 static void schedule_send_task(dvb_netdev*, int);
 static void hexdump(const unsigned char *, unsigned short);
 
-static atomic_t g_tx_count;
-
 static void intrpt_sendTask(struct work_struct* work)
 {
     Dword dwError = 0;
-    Byte garbage[188] = {0x47,0x1f,0xff,0x1c, 0x00, 0x00};
+    Byte garbage[TS_SZ] = {0x47,0x1f,0xff,0x1c, 0x00, 0x00};
     int count;
     int i;
     unsigned long cpu_flag;
@@ -50,68 +55,56 @@ static void intrpt_sendTask(struct work_struct* work)
     dwork = to_delayed_work(work);
     dvb = container_of(dwork, dvb_netdev, tx_send_task);
 
-    count = atomic_read(&g_tx_count);
+    count = atomic_read(&dvb->tx_count);
     if (count == 0) {
         // idle
         spin_lock_irqsave(&dvb->tx_lock, cpu_flag);
-        dwError = g_ITEAPI_TxSendTSData(dvb->itdev, garbage, 188);
+        dwError = g_ITEAPI_TxSendTSData(dvb->itdev, garbage, TS_SZ);
         spin_unlock_irqrestore(&dvb->tx_lock, cpu_flag);
 
-        dvb->netdev->stats.tx_carrier_errors++;
-
-        if (dwError != 188) {
-            printk(KERN_ERR "ERROR: sendTask g_ITEAPI_TxSendTSData %ld\n", dwError);
+        if (dwError != TS_SZ) {
+            PERROR("send garbage when idle. error=%ld\n", dwError);
+        }
+        else {
+            dvb->netdev->stats.tx_carrier_errors++;
         }
     }
     else if (count >= RX_RING_BUF_COUNT) {
+        /* handling reamining next time */
         int remaining = count % RX_RING_BUF_COUNT;
         count = count - remaining;
-        /*
-        spin_lock_irqsave(&dvb->tx_lock, cpu_flag);
-        for (i = RX_RING_BUF_COUNT - remaining; i > 0; i--) {
-
-            dwError = g_ITEAPI_TxSendTSData(dvb->itdev, garbage, 188);
-
-            dvb->netdev->stats.tx_carrier_errors++;
-
-            if (dwError != 188) {
-                printk(KERN_ERR "ERROR: sendTask g_ITEAPI_TxSendTSData %ld\n", dwError);
-                break;
-            }
-        }
-        spin_unlock_irqrestore(&dvb->tx_lock, cpu_flag);
-        */
     }
     else {
+        int sent = 0;
         spin_lock_irqsave(&dvb->tx_lock, cpu_flag);
         for (i = RX_RING_BUF_COUNT - count; i > 0; i--) {
+            dwError = g_ITEAPI_TxSendTSData(dvb->itdev, garbage, TS_SZ);
 
-            dwError = g_ITEAPI_TxSendTSData(dvb->itdev, garbage, 188);
-
-            dvb->netdev->stats.tx_carrier_errors++;
-
-            if (dwError != 188) {
-                printk(KERN_ERR "ERROR: sendTask g_ITEAPI_TxSendTSData %ld\n", dwError);
+            if (dwError != TS_SZ) {
+                PERROR("send garbage. count=%d, sent=%d, error=%ld\n", count, sent, dwError);
                 break;
+            }
+            else {
+                dvb->netdev->stats.tx_carrier_errors++;
+                sent++;
             }
         }
         spin_unlock_irqrestore(&dvb->tx_lock, cpu_flag);
     }
 
-    atomic_sub(count, &g_tx_count);
+    atomic_sub(count, &dvb->tx_count);
 
-    schedule_send_task(dvb, 100);
+    schedule_send_task(dvb, TX_SEND_PERIOD);
 }
 
 static void intrpt_readTask(struct work_struct* work)
 {
-    const Dword len = 188;
+    const Dword len = TS_SZ;
     Dword err = 0;
     Byte buf[len];
     Dword r;
     unsigned short pidFromBuf;
     int nFailCount = 0;
-    dvb_netdev* netdev;
     struct sk_buff* skb;
     int errRX = NET_RX_SUCCESS;
     struct delayed_work* dwork;
@@ -128,7 +121,11 @@ static void intrpt_readTask(struct work_struct* work)
 
         if (r<=0 || r != len) {
             msleep(10);
-            continue;
+            nFailCount++;
+            if (nFailCount > 100)
+                goto next;
+            else
+                continue;
         }
 
         if (buf[0] != 0x47) {
@@ -137,7 +134,7 @@ static void intrpt_readTask(struct work_struct* work)
                 r = 1;
                 err = DTV_GetData(dvb->itdev, buf, &r);
                 if (r <= 0 || r != 1) {
-                    printk(KERN_ERR "ERROR read %lu", r);
+                    PERROR("read=%lu", r);
                     goto next;
                 }
             }
@@ -146,7 +143,7 @@ static void intrpt_readTask(struct work_struct* work)
             r = 187;
             DTV_GetData(dvb->itdev, buf+1, &r);
             if (r != 187) {
-                printk(KERN_ERR "sync error read %lu", r);
+                PERROR("remaining read=%lu", r);
                 goto next;
             }
         }
@@ -184,7 +181,7 @@ static void intrpt_readTask(struct work_struct* work)
             errRX = netif_rx(skb);
             if (errRX != NET_RX_SUCCESS) {
                 dvb->netdev->stats.rx_dropped++;
-                printk(KERN_ERR "ERROR: RxQueue drop packet.\n");
+                PERROR("RxQueue drop packet.\n");
             }
             else {
                 dvb->netdev->stats.rx_packets++;
@@ -203,7 +200,7 @@ static void intrpt_readTask(struct work_struct* work)
     }// end loop
 
 next:
-    schedule_read_task(dvb, 50);
+    schedule_read_task(dvb, RX_RECV_PERIOD);
 }
 
 static void startCapture(dvb_netdev* dvb)
@@ -214,42 +211,42 @@ static void startCapture(dvb_netdev* dvb)
 
     dev = dvb->itdev;
 
-    printk(KERN_INFO "%s()\n", __FUNCTION__);
+    PINFO("%s()\n", __FUNCTION__);
 
     err = DTV_AcquireChannel(dev, RECV_FREQ, 8000);
     if (err) {
-        printk(KERN_ERR "DTV_AcquireChannel error %ld\n", err);
+        PERROR("DTV_AcquireChannel error=%ld\n", err);
         return;
     }
 
-    printk(KERN_INFO "%s() end DTV_AcquireChannel\n", __FUNCTION__);
+    PINFO("%s() end DTV_AcquireChannel\n", __FUNCTION__);
 
     err = DTV_DisablePIDTbl(dev);
     if (err) {
-        printk(KERN_ERR "DTV_DisablePIDTbl error %lu\n", err);
+        PERROR("DTV_DisablePIDTbl error=%lu\n", err);
         return;
     }
 
-    printk(KERN_INFO "%s() end DTV_DisablePIDTbl\n", __FUNCTION__);
+    PINFO("%s() end DTV_DisablePIDTbl\n", __FUNCTION__);
 
     err = DTV_IsLocked(dev, &bLocked);
     if (err) {
-        printk(KERN_ERR "DTV_IsLocked error %lu\n", err);
+        PERROR("DTV_IsLocked error=%lu\n", err);
         return;
     }
 
-    printk(KERN_INFO "%s() end DTV_IsLocked\n", __FUNCTION__);
+    PINFO("%s() end DTV_IsLocked\n", __FUNCTION__);
 
     if (bLocked) {
-        printk(KERN_INFO "[dvbnet] Channel locked!!\n");
+        PINFO("[dvbnet] Channel locked!!\n");
     }
     else {
-        printk(KERN_ERR "[dvbnet] Channel unlocked!!\n");
+        PERROR("[dvbnet] Channel unlocked!!\n");
     }
 
     err = DTV_StartCapture(dev);
     if (err) {
-        printk(KERN_ERR "DTV_StartCapture error %lu\n", err);
+        PERROR("DTV_StartCapture error=%lu\n", err);
         return;
     }
 
@@ -260,9 +257,9 @@ static void startCapture(dvb_netdev* dvb)
     INIT_DELAYED_WORK(&dvb->rx_read_task, intrpt_readTask);
 
     // start timer
-    schedule_read_task(dvb, 10);
+    schedule_read_task(dvb, 1);
 
-    printk(KERN_INFO "dvbnet startCapture ok!\n");
+    PINFO("dvbnet startCapture ok!\n");
 }
 
 static void schedule_read_task(dvb_netdev* dvb, int ms)
@@ -272,11 +269,8 @@ static void schedule_read_task(dvb_netdev* dvb, int ms)
     if (dvb == NULL)
         return;
 
-    if (!dvb->rx_run)
-        return;
-
     spin_lock_irqsave(&dvb->rx_lock, flag);
-    if (dvb->rx_queue)
+    if (dvb->rx_run && dvb->rx_queue)
         queue_delayed_work(dvb->rx_queue, &dvb->rx_read_task, ms);
     spin_unlock_irqrestore(&dvb->rx_lock, flag);
 }
@@ -309,7 +303,7 @@ static void stopCapture(dvb_netdev* dvb)
 static int dvb_net_tx(struct sk_buff *skb, struct net_device *dev)
 {
     int ret = NETDEV_TX_OK;
-    dvb_netdev* netdev;
+    dvb_netdev* dvb;
     SNDUInfo snduinfo;
     uint32_t totalLength;
     ULEEncapCtx encapCtx;
@@ -317,7 +311,7 @@ static int dvb_net_tx(struct sk_buff *skb, struct net_device *dev)
     int count = 0;
     unsigned long cpu_flag;
     
-    netdev = netdev_priv(dev);
+    dvb = netdev_priv(dev);
 
     ule_init(&snduinfo, IPv4, skb->data, skb->len);
     totalLength = ule_getTotalLength(&snduinfo);
@@ -332,51 +326,29 @@ static int dvb_net_tx(struct sk_buff *skb, struct net_device *dev)
     encapCtx.snduPkt = pkt;
     encapCtx.snduLen = totalLength;
 
-    spin_lock_irqsave(&netdev->tx_lock, cpu_flag);
+    spin_lock_irqsave(&dvb->tx_lock, cpu_flag);
     while (encapCtx.snduIndex < encapCtx.snduLen) {
         ule_padding(&encapCtx);
         PDEBUG("tx %d snduIndex:%d snduLen:%d\n", count++, encapCtx.snduIndex, encapCtx.snduLen);
-        //hexdump(encapCtx.tsPkt, 188);
+        //hexdump(encapCtx.tsPkt, TS_SZ);
 
-        len = g_ITEAPI_TxSendTSData(netdev->itdev, encapCtx.tsPkt, 188);
+        len = g_ITEAPI_TxSendTSData(dvb->itdev, encapCtx.tsPkt, TS_SZ);
 
-        if (len != 188) {
-            printk(KERN_ERR "sendTsData error %ld\n", len);
+        if (len != TS_SZ) {
+            PERROR("sendTsData error %ld\n", len);
             dev->stats.tx_errors++;
-            // TODO
-            // ret = NETDEV_TX_???;
             break;
         }
         else {
-            atomic_inc(&g_tx_count);
+            atomic_inc(&dvb->tx_count);
             dev->stats.tx_packets++;
-            dev->stats.tx_bytes += 188;
+            dev->stats.tx_bytes += TS_SZ;
         }
     }
-    spin_unlock_irqrestore(&netdev->tx_lock, cpu_flag);
+    spin_unlock_irqrestore(&dvb->tx_lock, cpu_flag);
 
-    netif_start_queue(dev);
     dev_kfree_skb(skb);
     return ret;
-}
-
-static void dvb_net_set_multicast_list (struct net_device *dev)
-{
-    /* struct dvb_net_priv *priv = netdev_priv(dev); */
-    /* schedule_work(&priv->set_multicast_list_wq); */
-}
-
-static int dvb_net_set_mac (struct net_device *dev, void *p)
-{
-    /* struct dvb_net_priv *priv = netdev_priv(dev); */
-    /* struct sockaddr *addr=p; */
-
-    /* memcpy(dev->dev_addr, addr->sa_data, dev->addr_len); */
-
-    /* if (netif_running(dev)) */
-    /*     schedule_work(&priv->restart_net_feed_wq); */
-
-    return 0;
 }
 
 static Dword startTransfer(dvb_netdev* dvb)
@@ -388,11 +360,11 @@ static Dword startTransfer(dvb_netdev* dvb)
 
     dev = dvb->itdev;
 
-    printk(KERN_INFO "%s()\n", __FUNCTION__);
+    PINFO("%s()\n", __FUNCTION__);
 
     dwError = g_ITEAPI_TxSetChannel(dev, SEND_FREQ, 8000);
     if (dwError != Error_NO_ERROR) {
-        printk(KERN_ERR "set channel fail %ld\n", dwError);
+        PERROR("set channel fail error=%ld\n", dwError);
         return dwError;
     }
 
@@ -411,23 +383,23 @@ static Dword startTransfer(dvb_netdev* dvb)
 
     dwError = g_ITEAPI_TxSetChannelModulation(dev, &req);
     if (dwError != Error_NO_ERROR) {
-        printk(KERN_ERR "setChannelModulation %ld\n", dwError);
+        PERROR("setChannelModulation error=%ld\n", dwError);
         return dwError;
     }
 
     /*
-    Byte CustomPacket_3[188]={0x47,0x10,0x03,0x1c,0x00,0x00};
-    Byte CustomPacket_4[188]={0x47,0x10,0x04,0x1c,0x00,0x00};
-    Byte CustomPacket_5[188]={0x47,0x10,0x05,0x1c,0x00,0x00};
-    dwError = g_ITEAPI_TxSetPeridicCustomPacket(dev, 188, CustomPacket_3, 1);
+    Byte CustomPacket_3[TS_SZ]={0x47,0x10,0x03,0x1c,0x00,0x00};
+    Byte CustomPacket_4[TS_SZ]={0x47,0x10,0x04,0x1c,0x00,0x00};
+    Byte CustomPacket_5[TS_SZ]={0x47,0x10,0x05,0x1c,0x00,0x00};
+    dwError = g_ITEAPI_TxSetPeridicCustomPacket(dev, TS_SZ, CustomPacket_3, 1);
     if (dwError != Error_NO_ERROR) {
-        printk(KERN_ERR "g_ITEAPI_TxAccessFwPSITable 1 fail %ld\n", dwError);
+        PERROR("g_ITEAPI_TxAccessFwPSITable 1 fail %ld\n", dwError);
         return dwError;
     }
 
     dwError = g_ITEAPI_TxSetPeridicCustomPacketTimer(dev, 1, 100);//ms
     if (dwError != Error_NO_ERROR) {
-        printk(KERN_ERR "g_ITEAPI_TxSetFwPSITableTimer  %d fail\n", 1);
+        PERROR("g_ITEAPI_TxSetFwPSITableTimer  %d fail\n", 1);
         return dwError;
     }
     */
@@ -435,7 +407,7 @@ static Dword startTransfer(dvb_netdev* dvb)
     for (i = 1; i <= 5; i++) {
         dwError = g_ITEAPI_TxSetPeridicCustomPacketTimer(dev, i, 0);
         if (dwError != Error_NO_ERROR) {
-            printk(KERN_ERR "g_ITEAPI_TxSetFwPSITableTimer  %d fail\n", 1);
+            PERROR("g_ITEAPI_TxSetFwPSITableTimer  %d fail\n", 1);
 
             /* reset error code */
             dwError = Error_NO_ERROR;
@@ -444,18 +416,19 @@ static Dword startTransfer(dvb_netdev* dvb)
 
     dwError = g_ITEAPI_StartTransfer(dev);
     if (dwError != Error_NO_ERROR) {
-        printk(KERN_ERR "startTransfer error %ld\n", dwError);
+        PERROR("startTransfer error=%ld\n", dwError);
         return dwError;
     }
 
     dvb->tx_run = true;
+    atomic_set(&dvb->tx_count, 0);
 
     // init timer
     dvb->tx_queue = create_singlethread_workqueue("sendQueue");
     INIT_DELAYED_WORK(&dvb->tx_send_task, intrpt_sendTask);
 
     // start timer
-    queue_delayed_work(dvb->tx_queue, &dvb->tx_send_task, 50);
+    schedule_send_task(dvb, 1);
 
     return dwError;
 }
@@ -467,11 +440,8 @@ static void schedule_send_task(dvb_netdev* dvb, int ms)
     if (dvb == NULL)
         return;
 
-    if (!dvb->tx_run)
-        return;
-
     spin_lock_irqsave(&dvb->tx_lock, flag);
-    if (dvb->tx_queue)
+    if (dvb->tx_run && dvb->tx_queue)
         queue_delayed_work(dvb->tx_queue, &dvb->tx_send_task, ms);
     spin_unlock_irqrestore(&dvb->tx_lock, flag);
 }
@@ -485,6 +455,7 @@ static Dword stopTransfer(dvb_netdev* dvb)
         return dwError;
 
     dvb->tx_run = false;
+    atomic_set(&dvb->tx_count, 0);
 
     // release queue
     spin_lock_irqsave(&dvb->tx_lock, flag);
@@ -497,7 +468,7 @@ static Dword stopTransfer(dvb_netdev* dvb)
 
     dwError = g_ITEAPI_StopTransfer(dvb->itdev);
     if (dwError != Error_NO_ERROR) {
-        printk(KERN_ERR "stopTransfer error %ld\n", dwError);
+        PERROR("stopTransfer error=%ld\n", dwError);
         return dwError;
     }
 
@@ -509,7 +480,7 @@ static int dvb_net_open(struct net_device *dev)
     dvb_netdev* dvb = NULL;
     Dword dwError = 0;
 
-    printk(KERN_INFO "dvbnet open.\n");
+    PINFO("dvbnet open.\n");
     dvb = netdev_priv(dev);
 
     startTransfer(dvb);
@@ -532,7 +503,27 @@ static int dvb_net_stop(struct net_device *dev)
     // disallow upper layers to call the device hard_start_xmit routin.
     netif_stop_queue(dev);
 
-    printk(KERN_INFO "dvbnet stop.\n");
+    PINFO("dvbnet stop.\n");
+
+    return 0;
+}
+
+#if 0
+static void dvb_net_set_multicast_list (struct net_device *dev)
+{
+    /* struct dvb_net_priv *priv = netdev_priv(dev); */
+    /* schedule_work(&priv->set_multicast_list_wq); */
+}
+
+static int dvb_net_set_mac (struct net_device *dev, void *p)
+{
+    /* struct dvb_net_priv *priv = netdev_priv(dev); */
+    /* struct sockaddr *addr=p; */
+
+    /* memcpy(dev->dev_addr, addr->sa_data, dev->addr_len); */
+
+    /* if (netif_running(dev)) */
+    /*     schedule_work(&priv->restart_net_feed_wq); */
 
     return 0;
 }
@@ -570,8 +561,11 @@ static int dvb_do_ioctl(struct net_device *dev, struct ifreq *rq, int cmd)
     return 0;
 }
 
-static void dvb_tx_timeout(struct net_device* dev) {
-    printk(KERN_ERR "dvb_tx_timeout\n");
+#endif
+
+static void dvb_tx_timeout(struct net_device* dev)
+{
+    PERROR("dvb_tx_timeout\n");
 }
 
 static const struct net_device_ops dvb_netdev_ops = {
@@ -597,7 +591,7 @@ static const struct header_ops dvb_header_ops = {
 
 static void dvb_net_setup(struct net_device *dev)
 {
-    printk(KERN_INFO "dvbnet setup.\n");
+    PINFO("dvbnet setup.\n");
 
     ether_setup(dev);
     /* dev->header_ops     = &dvb_header_ops; */
@@ -614,7 +608,7 @@ dvb_netdev* dvb_alloc_netdev(struct it950x_dev* itdev)
 
     netdev = alloc_netdev(sizeof(dvb_netdev), "dvb%d", dvb_net_setup);
     if (!netdev) {
-        printk(KERN_ERR "dvbnet alloc netdev err\n");
+        PERROR("dvbnet alloc netdev err\n");
         return NULL;
     }
 
@@ -625,26 +619,27 @@ dvb_netdev* dvb_alloc_netdev(struct it950x_dev* itdev)
     // TODO clear while fail
     err = it950x_usb_rx_alloc_dev(dev->itdev);
     if (err) { 
-        printk(KERN_ERR "dvbnet it950x_usb_rx_alloc_dev error\n");
+        PERROR("it950x_usb_rx_alloc_dev error\n");
         return NULL;
     }
 
     err = it950x_usb_tx_alloc_dev(dev->itdev);
     if (err) {
-        printk(KERN_ERR "dvbnet it950x_usb_rx_alloc_dev error\n");
+        PERROR("it950x_usb_rx_alloc_dev error\n");
         return NULL;
     }
 
     err = register_netdev(netdev);
     if (err) {
-        printk(KERN_ERR "dvbnet register err\n");
+        PERROR("register err\n");
         return NULL;
     }
 
     ule_initDemuxCtx(&dev->demux);
     dev->demux.pid = 0x1FAF;
 
-    atomic_set(&g_tx_count, 0);// XXX
+    spin_lock_init(&dev->rx_lock);
+    spin_lock_init(&dev->tx_lock);
 
     return dev;
 }

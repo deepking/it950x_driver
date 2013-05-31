@@ -4,6 +4,7 @@
 #include <linux/netdevice.h>
 #include <linux/spinlock.h>
 #include <linux/workqueue.h>
+#include <asm/atomic.h>
 
 #include "ule.h"
 
@@ -19,6 +20,7 @@ typedef struct dvb_netdev {
     spinlock_t tx_lock;
     struct workqueue_struct* tx_queue;
     struct delayed_work tx_send_task;
+    atomic_t tx_count;
 
     volatile bool rx_run;
     spinlock_t rx_lock;
