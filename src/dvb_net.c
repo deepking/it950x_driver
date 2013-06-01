@@ -29,6 +29,7 @@
 /* timer millis */
 #define TX_SEND_PERIOD 50
 #define RX_RECV_PERIOD 50
+#define RX_MAX_FAIL_COUNT RX_RING_BUF_COUNT * (16 + 1)
 
 //#define PDEBUG(fmt, args...) printk(KERN_DEBUG "dvbnet: " fmt, ## args)
 #define PDEBUG(fmt, args...)
@@ -120,12 +121,14 @@ static void intrpt_readTask(struct work_struct* work)
         err = DTV_GetData(dvb->itdev, buf, &r);
 
         if (r<=0 || r != len) {
-            msleep(10);
             nFailCount++;
-            if (nFailCount > 100)
+            if (nFailCount > RX_MAX_FAIL_COUNT) {
                 goto next;
-            else
+            }
+            else {
+                msleep(10);
                 continue;
+            }
         }
 
         if (buf[0] != 0x47) {
@@ -151,10 +154,17 @@ static void intrpt_readTask(struct work_struct* work)
         pidFromBuf = ts_getPID(buf);
         if (pidFromBuf == 0x1FFF) {
             dvb->netdev->stats.rx_frame_errors++;
-            continue;
+            nFailCount++;
+            if (nFailCount >= RX_MAX_FAIL_COUNT)
+                goto next;
+            else
+                continue;
         }
 
-        if (pidFromBuf != 0x1FAF) {
+        /* reset fail counter */
+        nFailCount = 0;
+
+        if (pidFromBuf != dvb->demux.pid) {
             dvb->netdev->stats.rx_frame_errors++;
             continue;
         }
