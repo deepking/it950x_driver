@@ -21,6 +21,7 @@
 #include "ule.h"
 
 #define TS_SZ 188
+#define TX_RING_BUF_COUNT 174
 #define RX_RING_BUF_COUNT 348
 
 #define SEND_FREQ 666000
@@ -70,15 +71,15 @@ static void intrpt_sendTask(struct work_struct* work)
             dvb->netdev->stats.tx_carrier_errors++;
         }
     }
-    else if (count >= RX_RING_BUF_COUNT) {
+    else if (count >= TX_RING_BUF_COUNT) {
         /* handling reamining next time */
-        int remaining = count % RX_RING_BUF_COUNT;
+        int remaining = count % TX_RING_BUF_COUNT;
         count = count - remaining;
     }
     else {
         int sent = 0;
         spin_lock_irqsave(&dvb->tx_lock, cpu_flag);
-        for (i = RX_RING_BUF_COUNT - count; i > 0; i--) {
+        for (i = TX_RING_BUF_COUNT - count; i > 0; i--) {
             dwError = g_ITEAPI_TxSendTSData(dvb->itdev, garbage, TS_SZ);
 
             if (dwError != TS_SZ) {
