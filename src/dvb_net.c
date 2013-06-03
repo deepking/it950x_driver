@@ -138,7 +138,7 @@ static void intrpt_readTask(struct work_struct* work)
                 r = 1;
                 err = DTV_GetData(dvb->itdev, buf, &r);
                 if (r <= 0 || r != 1) {
-                    PERROR("read=%lu", r);
+                    PERROR("read=%lu\n", r);
                     goto next;
                 }
             }
@@ -147,7 +147,7 @@ static void intrpt_readTask(struct work_struct* work)
             r = 187;
             DTV_GetData(dvb->itdev, buf+1, &r);
             if (r != 187) {
-                PERROR("remaining read=%lu", r);
+                PERROR("remaining read=%lu\n", r);
                 goto next;
             }
         }
