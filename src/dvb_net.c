@@ -333,7 +333,7 @@ static int dvb_net_tx(struct sk_buff *skb, struct net_device *dev)
     //    totalLength, snduinfo.length, snduinfo.type, snduinfo.pdu.length);
 
     ule_initEncapCtx(&encapCtx);
-    encapCtx.pid = 0x1FAF;// TODO: param
+    encapCtx.pid = dvb->demux.pid;
     encapCtx.snduPkt = pkt;
     encapCtx.snduLen = totalLength;
 
