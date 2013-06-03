@@ -28,7 +28,7 @@
 #define RECV_FREQ 666000
 
 /* timer millis */
-#define TX_SEND_PERIOD 50
+#define TX_SEND_PERIOD 20
 #define RX_RECV_PERIOD 50
 #define RX_MAX_FAIL_COUNT RX_RING_BUF_COUNT * (16 + 1)
 
@@ -277,7 +277,7 @@ static void schedule_read_task(dvb_netdev* dvb, int ms)
 {
     unsigned long flag;
 
-    if (dvb == NULL)
+    if (dvb == NULL || !dvb->rx_run)
         return;
 
     spin_lock_irqsave(&dvb->rx_lock, flag);
@@ -295,19 +295,19 @@ static void stopCapture(dvb_netdev* dvb)
 
     dvb->rx_run = false;
 
-    // release queue
-    spin_lock_irqsave(&dvb->rx_lock, flag);
-
+    /* release queue */
     if (dvb->rx_queue) {
         cancel_delayed_work(&dvb->rx_read_task);
+
+        spin_lock_irqsave(&dvb->rx_lock, flag);
         destroy_workqueue(dvb->rx_queue);
         dvb->rx_queue = NULL;
+        spin_unlock_irqrestore(&dvb->rx_lock, flag);
     }
-
-    spin_unlock_irqrestore(&dvb->rx_lock, flag);
 
     if (dvb->itdev) {
         DTV_StopCapture(dvb->itdev);
+        dvb->itdev = NULL;
     }
 }
 
@@ -448,7 +448,7 @@ static void schedule_send_task(dvb_netdev* dvb, int ms)
 {
     unsigned long flag;
     
-    if (dvb == NULL)
+    if (dvb == NULL || !dvb->tx_run)
         return;
 
     spin_lock_irqsave(&dvb->tx_lock, flag);
@@ -469,13 +469,14 @@ static Dword stopTransfer(dvb_netdev* dvb)
     atomic_set(&dvb->tx_count, 0);
 
     // release queue
-    spin_lock_irqsave(&dvb->tx_lock, flag);
     if (dvb->tx_queue) {
         cancel_delayed_work(&dvb->tx_send_task);
+
+        spin_lock_irqsave(&dvb->tx_lock, flag);
         destroy_workqueue(dvb->tx_queue);
         dvb->tx_queue = NULL;
+        spin_unlock_irqrestore(&dvb->tx_lock, flag);
     }
-    spin_unlock_irqrestore(&dvb->tx_lock, flag);
 
     dwError = g_ITEAPI_StopTransfer(dvb->itdev);
     if (dwError != Error_NO_ERROR) {
