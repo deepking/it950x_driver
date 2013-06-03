@@ -32,10 +32,10 @@
 #define RX_RECV_PERIOD 50
 #define RX_MAX_FAIL_COUNT RX_RING_BUF_COUNT * (16 + 1)
 
-//#define PDEBUG(fmt, args...) printk(KERN_DEBUG "dvbnet: " fmt, ## args)
+//#define PDEBUG(fmt, args...) printk(KERN_DEBUG "[DEBUG] (%s:%d) " fmt, __FUNCTION__,__LINE__, ## args)
 #define PDEBUG(fmt, args...)
-#define PINFO(fmt, args...) printk(KERN_INFO fmt, ## args) 
-#define PERROR(fmt, args...) printk(KERN_ERR "dvb_error: " fmt, ## args)
+#define PINFO(fmt, args...) printk(KERN_INFO "[INFO] " fmt, ## args) 
+#define PERROR(fmt, args...) printk(KERN_ERR "[ERROR] (%s:%d) " fmt, __FUNCTION__,__LINE__, ## args)
 
 static void intrpt_readTask(struct work_struct*);
 static void intrpt_sendTask(struct work_struct*);
