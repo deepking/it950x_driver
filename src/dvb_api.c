@@ -203,6 +203,7 @@ Dword DTV_GetData(
 
     request.bufferLength = pdwBufferLength;
     request.buffer = pBuffer;
+    request.error = 0;
 
     *pdwBufferLength = it950x_usb_rx_read_dev(dev, pBuffer, *pdwBufferLength);
     dwError = request.error;
