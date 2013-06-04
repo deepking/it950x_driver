@@ -23,6 +23,7 @@
 #define TS_SZ 188
 #define TX_RING_BUF_COUNT 174
 #define RX_RING_BUF_COUNT 348
+#define RX_MAX_POLL_COUNT 348*2
 
 #define SEND_FREQ 666000
 #define RECV_FREQ 666000
@@ -111,6 +112,7 @@ static void intrpt_readTask(struct work_struct* work)
     int errRX = NET_RX_SUCCESS;
     struct delayed_work* dwork;
     dvb_netdev* dvb;
+    int recv_count = 0;
 
     // find dvb_netdev
     dwork = to_delayed_work(work);
@@ -196,6 +198,7 @@ static void intrpt_readTask(struct work_struct* work)
             }
             else {
                 dvb->netdev->stats.rx_packets++;
+                recv_count++;
             }
 
             // netdevice stats
@@ -206,6 +209,10 @@ static void intrpt_readTask(struct work_struct* work)
             kfree(dvb->demux.ule_sndu_outbuf);
             dvb->demux.ule_sndu_outbuf = NULL;
             dvb->demux.ule_sndu_outbuf_len = 0;
+        }
+
+        if (recv_count > RX_MAX_POLL_COUNT) {
+            break;
         }
 
     }// end loop
