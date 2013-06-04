@@ -1304,7 +1304,7 @@ static int it950x_usb_tx_ioctl(struct inode *inode, struct file *file,
 		return -ENODEV;
 	}
 
-	return it950x_usb_tx_ioctl_dev(dev);
+	return it950x_usb_tx_ioctl_dev(dev, cmd, parg);
 }
 #endif
 
@@ -1810,7 +1810,7 @@ int it950x_usb_rx_free_dev(struct it950x_dev *dev)
 #if LINUX_VERSION_CODE <= KERNEL_VERSION(2,6,35)
 int it950x_usb_rx_ioctl_dev(struct it950x_dev *dev, unsigned int cmd,  unsigned long parg)
 {
-    Byte temp0 = 0
+    Byte temp0 = 0;
         Byte temp1 = 1;
     Dword status;
 
