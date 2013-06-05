@@ -23,7 +23,7 @@
 #define TS_SZ 188
 #define TX_RING_BUF_COUNT 174
 #define RX_RING_BUF_COUNT 348
-#define RX_MAX_POLL_COUNT 348*2
+#define RX_MAX_POLL_COUNT 348*16
 
 #define SEND_FREQ 666000
 #define RECV_FREQ 666000
@@ -66,7 +66,7 @@ static void intrpt_sendTask(struct work_struct* work)
         spin_unlock_irqrestore(&dvb->tx_lock, cpu_flag);
 
         if (dwError != TS_SZ) {
-            PERROR("send garbage when idle. error=%ld\n", dwError);
+            PERROR("send garbage when idle. error=%lu\n", dwError);
         }
         else {
             dvb->netdev->stats.tx_carrier_errors++;
@@ -84,7 +84,7 @@ static void intrpt_sendTask(struct work_struct* work)
             dwError = g_ITEAPI_TxSendTSData(dvb->itdev, garbage, TS_SZ);
 
             if (dwError != TS_SZ) {
-                PERROR("send garbage. count=%d, sent=%d, error=%ld\n", count, sent, dwError);
+                PERROR("send garbage. count=%d, sent=%d, error=%lu\n", count, sent, dwError);
                 break;
             }
             else {
@@ -233,7 +233,7 @@ static void startCapture(dvb_netdev* dvb)
 
     err = DTV_AcquireChannel(dev, RECV_FREQ, 8000);
     if (err) {
-        PERROR("DTV_AcquireChannel error=%ld\n", err);
+        PERROR("DTV_AcquireChannel error=%lu\n", err);
         return;
     }
 
@@ -353,7 +353,7 @@ static int dvb_net_tx(struct sk_buff *skb, struct net_device *dev)
         len = g_ITEAPI_TxSendTSData(dvb->itdev, encapCtx.tsPkt, TS_SZ);
 
         if (len != TS_SZ) {
-            PERROR("sendTsData error %ld\n", len);
+            PERROR("sendTsData error %lu\n", len);
             dev->stats.tx_errors++;
             break;
         }
@@ -382,7 +382,7 @@ static Dword startTransfer(dvb_netdev* dvb)
 
     dwError = g_ITEAPI_TxSetChannel(dev, SEND_FREQ, 8000);
     if (dwError != Error_NO_ERROR) {
-        PERROR("set channel fail error=%ld\n", dwError);
+        PERROR("set channel fail error=%lu\n", dwError);
         return dwError;
     }
 
@@ -401,7 +401,7 @@ static Dword startTransfer(dvb_netdev* dvb)
 
     dwError = g_ITEAPI_TxSetChannelModulation(dev, &req);
     if (dwError != Error_NO_ERROR) {
-        PERROR("setChannelModulation error=%ld\n", dwError);
+        PERROR("setChannelModulation error=%lu\n", dwError);
         return dwError;
     }
 
@@ -411,7 +411,7 @@ static Dword startTransfer(dvb_netdev* dvb)
     Byte CustomPacket_5[TS_SZ]={0x47,0x10,0x05,0x1c,0x00,0x00};
     dwError = g_ITEAPI_TxSetPeridicCustomPacket(dev, TS_SZ, CustomPacket_3, 1);
     if (dwError != Error_NO_ERROR) {
-        PERROR("g_ITEAPI_TxAccessFwPSITable 1 fail %ld\n", dwError);
+        PERROR("g_ITEAPI_TxAccessFwPSITable 1 fail %lu\n", dwError);
         return dwError;
     }
 
@@ -425,7 +425,7 @@ static Dword startTransfer(dvb_netdev* dvb)
     for (i = 1; i <= 5; i++) {
         dwError = g_ITEAPI_TxSetPeridicCustomPacketTimer(dev, i, 0);
         if (dwError != Error_NO_ERROR) {
-            PERROR("g_ITEAPI_TxSetFwPSITableTimer  %d fail\n", 1);
+            PERROR("g_ITEAPI_TxSetFwPSITableTimer  %d fail\n", i);
 
             /* reset error code */
             dwError = Error_NO_ERROR;
@@ -434,7 +434,7 @@ static Dword startTransfer(dvb_netdev* dvb)
 
     dwError = g_ITEAPI_StartTransfer(dev);
     if (dwError != Error_NO_ERROR) {
-        PERROR("startTransfer error=%ld\n", dwError);
+        PERROR("startTransfer error=%lu\n", dwError);
         return dwError;
     }
 
@@ -487,7 +487,7 @@ static Dword stopTransfer(dvb_netdev* dvb)
 
     dwError = g_ITEAPI_StopTransfer(dvb->itdev);
     if (dwError != Error_NO_ERROR) {
-        PERROR("stopTransfer error=%ld\n", dwError);
+        PERROR("stopTransfer error=%lu\n", dwError);
         return dwError;
     }
 
