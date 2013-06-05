@@ -60,17 +60,7 @@ static void intrpt_sendTask(struct work_struct* work)
 
     count = atomic_read(&dvb->tx_count);
     if (count == 0) {
-        // idle
-        spin_lock_irqsave(&dvb->tx_lock, cpu_flag);
-        dwError = g_ITEAPI_TxSendTSData(dvb->itdev, garbage, TS_SZ);
-        spin_unlock_irqrestore(&dvb->tx_lock, cpu_flag);
-
-        if (dwError != TS_SZ) {
-            PERROR("send garbage when idle. error=%lu\n", dwError);
-        }
-        else {
-            dvb->netdev->stats.tx_carrier_errors++;
-        }
+        /* idle */
     }
     else if (count >= TX_RING_BUF_COUNT) {
         /* handling reamining next time */
