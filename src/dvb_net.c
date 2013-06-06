@@ -27,6 +27,7 @@
 
 #define SEND_FREQ 666000
 #define RECV_FREQ 666000
+#define DEFAULT_BANDWIDTH 6000
 
 /* timer millis */
 #define TX_SEND_PERIOD 20
@@ -227,7 +228,7 @@ static void startCapture(dvb_netdev* dvb)
 
     PINFO("%s()\n", __FUNCTION__);
 
-    err = DTV_AcquireChannel(dev, RECV_FREQ, 8000);
+    err = DTV_AcquireChannel(dev, RECV_FREQ, DEFAULT_BANDWIDTH);
     if (err) {
         PERROR("DTV_AcquireChannel error=%lu\n", err);
         return;
@@ -376,7 +377,7 @@ static Dword startTransfer(dvb_netdev* dvb)
 
     PINFO("%s()\n", __FUNCTION__);
 
-    dwError = g_ITEAPI_TxSetChannel(dev, SEND_FREQ, 8000);
+    dwError = g_ITEAPI_TxSetChannel(dev, SEND_FREQ, DEFAULT_BANDWIDTH);
     if (dwError != Error_NO_ERROR) {
         PERROR("set channel fail error=%lu\n", dwError);
         return dwError;
