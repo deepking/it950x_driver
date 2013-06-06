@@ -119,6 +119,10 @@ static void intrpt_readTask(struct work_struct* work)
     dwork = to_delayed_work(work);
     dvb = container_of(dwork, dvb_netdev, rx_read_task);
 
+    napi_schedule(&dvb->napi);
+    schedule_read_task(dvb, 50);
+    return;
+
     while (dvb->rx_run) {
         memset(buf, 0, len);
         r = len;
@@ -222,6 +226,113 @@ next:
     schedule_read_task(dvb, RX_RECV_PERIOD);
 }
 
+/*
+ * The poll implementation.
+ * @return the number of packets
+ */
+static int dvb_poll(struct napi_struct *napi, int budget)
+{
+    const Dword len = TS_SZ;
+    Dword err = 0;
+    Byte buf[len];
+    Dword r;
+    unsigned short pidFromBuf;
+    int nFailCount = 0;
+    struct sk_buff* skb;
+    int errRX = NET_RX_SUCCESS;
+    int recv_count = 0;
+    dvb_netdev* dvb;
+
+    dvb = container_of(napi, dvb_netdev, napi);
+
+retry:
+    while (dvb->rx_run && (recv_count < budget) && (nFailCount < RX_MAX_FAIL_COUNT)) {
+        memset(buf, 0, len);
+        r = len;
+        err = DTV_GetData(dvb->itdev, buf, &r);
+
+        if (r<=0 || r != len) {
+            nFailCount++;
+            continue;
+        }
+
+        if (buf[0] != 0x47) {
+            //printk(KERN_INFO "desync (%x, %x, %x, %x) - %lu\n", buf[0], buf[1], buf[2], buf[3], r);
+            while (buf[0] != 0x47) {
+                r = 1;
+                err = DTV_GetData(dvb->itdev, buf, &r);
+                if (r <= 0 || r != 1) {
+                    nFailCount++;
+                    PERROR("read=%lu, fail=%d\n", r, nFailCount);
+                    goto retry;
+                }
+            }
+
+            // remaining
+            r = 187;
+            DTV_GetData(dvb->itdev, buf+1, &r);
+            if (r != 187) {
+                nFailCount++;
+                PERROR("remaining read=%lu, fail=%d\n", r, nFailCount);
+                goto retry;
+            }
+        }
+
+        pidFromBuf = ts_getPID(buf);
+        if (pidFromBuf == 0x1FFF) {
+            dvb->netdev->stats.rx_frame_errors++;
+            nFailCount++;
+            continue;
+        }
+
+        /* reset fail counter */
+        nFailCount = 0;
+
+        if (pidFromBuf != dvb->demux.pid) {
+            dvb->netdev->stats.rx_frame_errors++;
+            continue;
+        }
+
+        ule_demux(&dvb->demux, buf, len);
+
+        // update stats
+        dvb->netdev->stats.rx_errors += dvb->demux.rx_errors;
+        dvb->netdev->stats.rx_frame_errors += dvb->demux.rx_frame_errors;
+        dvb->netdev->stats.rx_crc_errors += dvb->demux.rx_crc_errors;
+        dvb->netdev->stats.rx_dropped += dvb->demux.rx_dropped;
+
+        if (dvb->demux.ule_sndu_outbuf) {
+            PDEBUG("outbuf: len=%d\n", dvb->demux.ule_sndu_outbuf_len);
+            //hexdump(dvb->demux.ule_sndu_outbuf, dvb->demux.ule_sndu_outbuf_len);
+
+            skb = dev_alloc_skb(dvb->demux.ule_sndu_outbuf_len);
+            memcpy(skb_put(skb, dvb->demux.ule_sndu_outbuf_len), dvb->demux.ule_sndu_outbuf, dvb->demux.ule_sndu_outbuf_len);
+            skb->dev = dvb->netdev;
+            skb->protocol = eth_type_trans(skb, dvb->netdev);
+            skb->pkt_type = PACKET_HOST;
+            skb->ip_summed = CHECKSUM_UNNECESSARY;
+
+            errRX = netif_receive_skb(skb);
+            recv_count++;
+
+            // netdevice stats
+            dvb->netdev->stats.rx_packets++;
+            dvb->netdev->stats.rx_bytes += dvb->demux.ule_sndu_outbuf_len;
+                        
+            // clean & reset outbuf
+            kfree(dvb->demux.ule_sndu_outbuf);
+            dvb->demux.ule_sndu_outbuf = NULL;
+            dvb->demux.ule_sndu_outbuf_len = 0;
+        }
+    }// end loop
+
+    if (recv_count < budget) {
+        napi_complete(napi);
+    }
+
+    return recv_count;
+}
+
 static void startCapture(dvb_netdev* dvb)
 {
     Dword err = 0;
@@ -275,8 +386,9 @@ static void startCapture(dvb_netdev* dvb)
     dvb->rx_queue = create_singlethread_workqueue("readQueue"); 
     INIT_DELAYED_WORK(&dvb->rx_read_task, intrpt_readTask);
 
-    // start timer
-    schedule_read_task(dvb, 1);
+    netif_napi_add(dvb->netdev, &dvb->napi, dvb_poll, 99);// TODO tuning weight
+    napi_complete(&dvb->napi);
+    schedule_read_task(dvb, 50);
 
     PINFO("dvbnet startCapture ok!\n");
 }
@@ -300,6 +412,8 @@ static void stopCapture(dvb_netdev* dvb)
 
     if (dvb == NULL)
         return;
+
+    netif_napi_del(&dvb->napi);
 
     dvb->rx_run = false;
 

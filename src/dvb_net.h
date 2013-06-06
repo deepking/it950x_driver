@@ -26,6 +26,7 @@ typedef struct dvb_netdev {
     spinlock_t rx_lock;
     struct workqueue_struct* rx_queue;
     struct delayed_work rx_read_task;
+    struct napi_struct napi;
 } dvb_netdev;
 
 extern dvb_netdev* dvb_alloc_netdev(struct it950x_dev*);
