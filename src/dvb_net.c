@@ -54,7 +54,6 @@ static void intrpt_sendTask(struct work_struct* work)
     unsigned long cpu_flag;
     struct delayed_work* dwork;
     dvb_netdev* dvb;
-    int sent = 0;
 
     // find dvb_netdev
     dwork = to_delayed_work(work);
@@ -62,7 +61,17 @@ static void intrpt_sendTask(struct work_struct* work)
 
     count = atomic_read(&dvb->tx_count);
     if (count == 0) {
-        /* idle */
+        // idle
+        spin_lock_irqsave(&dvb->tx_lock, cpu_flag);
+        dwError = g_ITEAPI_TxSendTSData(dvb->itdev, garbage, TS_SZ);
+        spin_unlock_irqrestore(&dvb->tx_lock, cpu_flag);
+
+        if (dwError != TS_SZ) {
+            PERROR("send garbage when idle. error=%lu\n", dwError);
+        }
+        else {
+            dvb->netdev->stats.tx_carrier_errors++;
+        }
     }
     else if (count >= TX_RING_BUF_COUNT) {
         /* handling reamining next time */
@@ -70,6 +79,7 @@ static void intrpt_sendTask(struct work_struct* work)
         count = count - remaining;
     }
     else {
+        int sent = 0;
         spin_lock_irqsave(&dvb->tx_lock, cpu_flag);
         for (i = TX_RING_BUF_COUNT - count; i > 0; i--) {
             dwError = g_ITEAPI_TxSendTSData(dvb->itdev, garbage, TS_SZ);
@@ -83,16 +93,10 @@ static void intrpt_sendTask(struct work_struct* work)
                 sent++;
             }
         }
-        /* remove count next time */
-        count = 0;
         spin_unlock_irqrestore(&dvb->tx_lock, cpu_flag);
     }
 
-    if (count > 0)
-        atomic_sub(count, &dvb->tx_count);
-
-    if (sent > 0)
-        atomic_add(sent, &dvb->tx_count);
+    atomic_sub(count, &dvb->tx_count);
 
     schedule_send_task(dvb, TX_SEND_PERIOD);
 }
