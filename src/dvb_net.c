@@ -324,47 +324,38 @@ static int dvb_net_tx(struct sk_buff *skb, struct net_device *dev)
     int ret = NETDEV_TX_OK;
     dvb_netdev* dvb;
     SNDUInfo snduinfo;
-    uint32_t totalLength;
-    ULEEncapCtx encapCtx;
     Dword len = 0;
     int count = 0;
     unsigned long cpu_flag;
+    int err = 0;
     
     dvb = netdev_priv(dev);
 
     ule_init(&snduinfo, IPv4, skb->data, skb->len);
-    totalLength = ule_getTotalLength(&snduinfo);
-    unsigned char pkt[totalLength];
-    ule_encode(&snduinfo, pkt, totalLength);
-    
-    //printk(KERN_INFO "sndu: totalLength=%d, Len=%d, type=%xd, dataLen=%d\n", 
-    //    totalLength, snduinfo.length, snduinfo.type, snduinfo.pdu.length);
 
-    ule_initEncapCtx(&encapCtx);
-    encapCtx.pid = dvb->demux.pid;
-    encapCtx.snduPkt = pkt;
-    encapCtx.snduLen = totalLength;
+    ule_initEncapCtx(&dvb->encap);
+    dvb->encap.pid = dvb->demux.pid;
+
+    err = ule_encode2(&snduinfo, &dvb->encap);
+    if (err != 0) {
+        PERROR("ule encode error\n");
+        dev_kfree_skb(skb);
+        return ret;
+    }
 
     spin_lock_irqsave(&dvb->tx_lock, cpu_flag);
-    while (encapCtx.snduIndex < encapCtx.snduLen) {
-        ule_padding(&encapCtx);
-        PDEBUG("tx %d snduIndex:%d snduLen:%d\n", count++, encapCtx.snduIndex, encapCtx.snduLen);
-        //hexdump(encapCtx.tsPkt, TS_SZ);
-
-        len = g_ITEAPI_TxSendTSData(dvb->itdev, encapCtx.tsPkt, TS_SZ);
-
-        if (len != TS_SZ) {
-            PERROR("sendTsData error %lu\n", len);
-            dev->stats.tx_errors++;
-            break;
-        }
-        else {
-            atomic_inc(&dvb->tx_count);
-            dev->stats.tx_packets++;
-            dev->stats.tx_bytes += TS_SZ;
-        }
-    }
+    len = g_ITEAPI_TxSendTSData(dvb->itdev, dvb->encap.tsPkt, dvb->encap.tsPktLen);
     spin_unlock_irqrestore(&dvb->tx_lock, cpu_flag);
+
+    if (len != dvb->encap.tsPktLen) {
+        PERROR("sendTsData error %lu, tsLen=%u\n", len, dvb->encap.tsPktLen);
+        dev->stats.tx_errors++;
+    }
+    else {
+        atomic_inc(&dvb->tx_count);
+        dev->stats.tx_packets++;
+        dev->stats.tx_bytes += dvb->encap.tsPktLen;
+    }
 
     dev_kfree_skb(skb);
     return ret;
@@ -658,6 +649,9 @@ dvb_netdev* dvb_alloc_netdev(struct it950x_dev* itdev)
     ule_initDemuxCtx(&dev->demux);
     dev->demux.pid = 0x1FAF;
 
+    dev->encap.tsPkt = kmalloc(188 * 30, GFP_KERNEL);
+    dev->encap.tsPktMaxLen = 188 * 30;
+
     spin_lock_init(&dev->rx_lock);
     spin_lock_init(&dev->tx_lock);
 
@@ -671,6 +665,11 @@ void dvb_free_netdev(dvb_netdev* dev)
 
     stopTransfer(dev);
     stopCapture(dev);
+
+    if (dev->encap.tsPkt) {
+        kfree(dev->encap.tsPkt);
+        dev->encap.tsPkt = NULL;
+    }
 
     if (dev->itdev) {
         it950x_usb_tx_free_dev(dev->itdev);

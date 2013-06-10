@@ -15,6 +15,7 @@ typedef struct dvb_netdev {
     struct it950x_dev* itdev;
     struct net_device* netdev;
     ULEDemuxCtx demux;
+    ULEEncapCtx encap;
 
     volatile bool tx_run;
     spinlock_t tx_lock;

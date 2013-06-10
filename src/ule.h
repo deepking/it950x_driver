@@ -35,7 +35,9 @@ typedef struct {
     // TS
     uint16_t pid; // Packet ID
     uint8_t tscc; // TS continuity counter
-    unsigned char tsPkt[TS_SZ]; // TS packet max size 188
+    unsigned char* tsPkt;
+    uint32_t tsPktMaxLen;
+    uint32_t tsPktLen;
 
     // SNDU
     uint32_t snduLen;
@@ -156,6 +158,7 @@ int ule_init(SNDUInfo* info, SNDUType type, unsigned char* data, uint16_t length
  * @return error code
  */
 int ule_encode(SNDUInfo* info, unsigned char* pkt, size_t pktLength);
+int ule_encode2(SNDUInfo* sndu, ULEEncapCtx* ctx);
 
 int ule_padding(ULEEncapCtx* ctx);
 

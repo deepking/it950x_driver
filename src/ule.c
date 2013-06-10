@@ -71,6 +71,118 @@ int ule_encode(SNDUInfo* info, unsigned char* pkt, size_t pktLength)
     return 0;
 }
 
+int ule_encode2(SNDUInfo* sndu, ULEEncapCtx* ctx)
+{
+    int error = 0;
+
+    uint16_t header[2];
+    uint32_t crc;
+    unsigned char crc_bytes[4];
+
+    uint32_t pdu_remaining;
+    uint32_t sndu_len;
+
+    unsigned char* ts;
+    uint16_t ts_remaining;
+    int len;
+
+    unsigned char* pdu_where;
+
+    ctx->tsPktLen = 0;
+    sndu_len = ule_getTotalLength(sndu);
+    /* outbuf overflow */
+    if (sndu_len >= ctx->tsPktMaxLen) {
+        printk(KERN_INFO "sndu_len=%d, tsMaxLen=%d\n", sndu_len, ctx->tsPktMaxLen);
+        return 1;// TODO error code
+    }
+
+    /* reset outbuf */
+    memset(ctx->tsPkt, 0, ctx->tsPktMaxLen);
+
+    /* ule header */
+    header[0] = htons(sndu->length); // set length
+    header[1] = htons(SNDUTypeValue[sndu->type]); // set protocol type
+    
+    crc = crc32ForUle((unsigned char*) header, sndu->pdu.data, sndu->pdu.length);
+    *((uint32_t*) crc_bytes) = htonl(crc);
+
+    pdu_remaining = sndu->pdu.length;
+    ts_remaining = TS_SZ;
+    pdu_where = sndu->pdu.data;
+
+    /* pad ule head */
+    ts = ctx->tsPkt;
+    ts_reset(ts);
+    ts_setPID(ts, ctx->pid);
+    ts_setContinuityCounter(ts, ctx->tscc);
+    ts_setPUSI(ts, true);
+    ts_setPayloadPointer(ts, 0);
+    ctx->tscc = (ctx->tscc + 1) & 0x0F; // inc count
+    ts_remaining -= (4 + 1); // header(4) + payloadPointer(1)
+    /* append pdu data */
+    len = min(sndu->pdu.length, ts_remaining);
+    memcpy(ts + (TS_SZ - ts_remaining), pdu_where, len);
+    pdu_where += len;
+    /* remaining bytes */
+    ts_remaining -= len;
+    pdu_remaining -= len;
+    /* get next ts frame if full */
+    if (ts_remaining == 0) {
+        ts += TS_SZ;
+        ts_remaining = TS_SZ;
+    }
+
+    /* pad remaining ule data */
+    while (pdu_remaining > 0) {
+        ts_reset(ts);
+        ts_setPID(ts, ctx->pid);
+        ts_setContinuityCounter(ts, ctx->tscc);
+        ctx->tscc = (ctx->tscc + 1) & 0x0F; // inc count
+        ts_remaining -= 4; // header(4)
+        /* append pdu data */
+        len = min(sndu->pdu.length, ts_remaining);
+        memcpy(ts + (TS_SZ - ts_remaining), pdu_where, len);
+        pdu_where += len;
+        /* remaining bytes */
+        ts_remaining -= len;
+        pdu_remaining -= len;
+        /* get next ts frame if full */
+        if (ts_remaining == 0) {
+            ts += TS_SZ;
+            ts_remaining = TS_SZ;
+        }
+    }
+
+    /* pad ule crc */
+    len = min((uint16_t) 4, ts_remaining);
+    memcpy(ts + (TS_SZ - ts_remaining), crc_bytes, len);
+    ts_remaining -= len;
+    if (ts_remaining != 0) {
+        memset(ts + (TS_SZ - ts_remaining), 0xFF, ts_remaining);
+    }
+    else if (len < 4) {
+        ts += TS_SZ;
+        ts_remaining = TS_SZ;
+        /* pad ule head */
+        ts = ctx->tsPkt;
+        ts_reset(ts);
+        ts_setPID(ts, ctx->pid);
+        ts_setContinuityCounter(ts, ctx->tscc);
+        ts_setPUSI(ts, true);
+        ts_setPayloadPointer(ts, 0);
+        ctx->tscc = (ctx->tscc + 1) & 0x0F; // inc count
+        ts_remaining -= (4 + 1); // header(4) + payloadPointer(1)
+        /* append remaining crc32 */
+        memcpy(ts + (TS_SZ - ts_remaining), crc_bytes + len, 4 - len);
+        ts_remaining -= (4 - len);
+        memset(ts + (TS_SZ - ts_remaining), 0xFF, ts_remaining);
+    }
+
+    ctx->tsPktLen = ts - ctx->tsPkt + TS_SZ;
+
+    return error;
+}
+
 int ule_padding(ULEEncapCtx* ctx)
 {
     byte* pp;
