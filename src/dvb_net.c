@@ -59,6 +59,7 @@ static void intrpt_sendTask(struct work_struct* work)
     dwork = to_delayed_work(work);
     dvb = container_of(dwork, dvb_netdev, tx_send_task);
 
+while (dvb->tx_run) {
     count = atomic_read(&dvb->tx_count);
     if (count == 0) {
         // idle
@@ -72,11 +73,19 @@ static void intrpt_sendTask(struct work_struct* work)
         else {
             dvb->netdev->stats.tx_carrier_errors++;
         }
+msleep(30);
     }
     else if (count >= TX_RING_BUF_COUNT) {
         /* handling reamining next time */
         int remaining = count % TX_RING_BUF_COUNT;
         count = count - remaining;
+    atomic_sub(count, &dvb->tx_count);
+if (count <= TX_RING_BUF_COUNT) {
+msleep(30);
+}
+else {
+msleep(60);
+}
     }
     else {
         int sent = 0;
@@ -94,9 +103,11 @@ static void intrpt_sendTask(struct work_struct* work)
             }
         }
         spin_unlock_irqrestore(&dvb->tx_lock, cpu_flag);
+    atomic_sub(count, &dvb->tx_count);
+msleep(60);
     }
 
-    atomic_sub(count, &dvb->tx_count);
+}
 
     schedule_send_task(dvb, TX_SEND_PERIOD);
 }
@@ -125,12 +136,13 @@ static void intrpt_readTask(struct work_struct* work)
         err = DTV_GetData(dvb->itdev, buf, &r);
 
         if (r<=0 || r != len) {
-            nFailCount++;
             if (nFailCount > RX_MAX_FAIL_COUNT) {
-                goto next;
+msleep(5);
+nFailCount = 0;
+continue;
             }
             else {
-                msleep(10);
+                msleep(1);
                 continue;
             }
         }
@@ -159,8 +171,11 @@ static void intrpt_readTask(struct work_struct* work)
         if (pidFromBuf == 0x1FFF) {
             dvb->netdev->stats.rx_frame_errors++;
             nFailCount++;
-            if (nFailCount >= RX_MAX_FAIL_COUNT)
-                goto next;
+            if (nFailCount >= RX_MAX_FAIL_COUNT) {
+msleep(5);
+nFailCount = 0;
+continue;
+}
             else
                 continue;
         }
@@ -210,10 +225,6 @@ static void intrpt_readTask(struct work_struct* work)
             kfree(dvb->demux.ule_sndu_outbuf);
             dvb->demux.ule_sndu_outbuf = NULL;
             dvb->demux.ule_sndu_outbuf_len = 0;
-        }
-
-        if (recv_count > RX_MAX_POLL_COUNT) {
-            break;
         }
 
     }// end loop
