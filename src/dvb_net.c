@@ -29,9 +29,12 @@
 #define RECV_FREQ 666000
 #define DEFAULT_BANDWIDTH 6000
 
-/* timer millis */
-#define TX_SEND_PERIOD 20
-#define RX_RECV_PERIOD 50
+/* tx timer millis */
+#define TX_CHECK_PERIOD 60
+#define TX_CHECK_REMAINING_PERIOD 30
+#define TX_SEND_NULL_PERIOD 30
+/* rx timer millis */
+#define RX_RECV_PERIOD 5
 #define RX_MAX_FAIL_COUNT RX_RING_BUF_COUNT * (16 + 1)
 
 //#define PDEBUG(fmt, args...) printk(KERN_DEBUG "[DEBUG] (%s:%d) " fmt, __FUNCTION__,__LINE__, ## args)
@@ -59,57 +62,57 @@ static void intrpt_sendTask(struct work_struct* work)
     dwork = to_delayed_work(work);
     dvb = container_of(dwork, dvb_netdev, tx_send_task);
 
-while (dvb->tx_run) {
-    count = atomic_read(&dvb->tx_count);
-    if (count == 0) {
-        // idle
-        spin_lock_irqsave(&dvb->tx_lock, cpu_flag);
-        dwError = g_ITEAPI_TxSendTSData(dvb->itdev, garbage, TS_SZ);
-        spin_unlock_irqrestore(&dvb->tx_lock, cpu_flag);
-
-        if (dwError != TS_SZ) {
-            PERROR("send garbage when idle. error=%lu\n", dwError);
-        }
-        else {
-            dvb->netdev->stats.tx_carrier_errors++;
-        }
-msleep(30);
-    }
-    else if (count >= TX_RING_BUF_COUNT) {
-        /* handling reamining next time */
-        int remaining = count % TX_RING_BUF_COUNT;
-        count = count - remaining;
-    atomic_sub(count, &dvb->tx_count);
-if (count <= TX_RING_BUF_COUNT) {
-msleep(30);
-}
-else {
-msleep(60);
-}
-    }
-    else {
-        int sent = 0;
-        spin_lock_irqsave(&dvb->tx_lock, cpu_flag);
-        for (i = TX_RING_BUF_COUNT - count; i > 0; i--) {
+    while (dvb->tx_run) {
+        count = atomic_read(&dvb->tx_count);
+        if (count == 0) {
+            // idle
+            spin_lock_irqsave(&dvb->tx_lock, cpu_flag);
             dwError = g_ITEAPI_TxSendTSData(dvb->itdev, garbage, TS_SZ);
+            spin_unlock_irqrestore(&dvb->tx_lock, cpu_flag);
 
             if (dwError != TS_SZ) {
-                PERROR("send garbage. count=%d, sent=%d, error=%lu\n", count, sent, dwError);
-                break;
+                PERROR("send garbage when idle. error=%lu\n", dwError);
             }
             else {
                 dvb->netdev->stats.tx_carrier_errors++;
-                sent++;
+            }
+
+            msleep(TX_SEND_NULL_PERIOD);
+        }
+        else if (count >= TX_RING_BUF_COUNT) {
+            /* handling reamining next time */
+            int remaining = count % TX_RING_BUF_COUNT;
+            count = count - remaining;
+            atomic_sub(count, &dvb->tx_count);
+
+            if (count <= TX_RING_BUF_COUNT) {
+                msleep(TX_CHECK_REMAINING_PERIOD);
+            }
+            else {
+                msleep(TX_CHECK_PERIOD);
             }
         }
-        spin_unlock_irqrestore(&dvb->tx_lock, cpu_flag);
-    atomic_sub(count, &dvb->tx_count);
-msleep(60);
-    }
+        else {
+            int sent = 0;
+            spin_lock_irqsave(&dvb->tx_lock, cpu_flag);
+            for (i = TX_RING_BUF_COUNT - count; i > 0; i--) {
+                dwError = g_ITEAPI_TxSendTSData(dvb->itdev, garbage, TS_SZ);
 
-}
+                if (dwError != TS_SZ) {
+                    PERROR("send garbage. count=%d, sent=%d, error=%lu\n", count, sent, dwError);
+                    break;
+                }
+                else {
+                    dvb->netdev->stats.tx_carrier_errors++;
+                    sent++;
+                }
+            }
+            spin_unlock_irqrestore(&dvb->tx_lock, cpu_flag);
+            atomic_sub(count, &dvb->tx_count);
 
-    schedule_send_task(dvb, TX_SEND_PERIOD);
+            msleep(TX_CHECK_PERIOD);
+        }
+    }//end loop
 }
 
 static void intrpt_readTask(struct work_struct* work)
@@ -137,16 +140,19 @@ static void intrpt_readTask(struct work_struct* work)
 
         if (r<=0 || r != len) {
             if (nFailCount > RX_MAX_FAIL_COUNT) {
-msleep(5);
-nFailCount = 0;
-continue;
+                /* avoid request storm */
+                msleep(RX_RECV_PERIOD);
+                /* reset fail counter */
+                nFailCount = 0;
             }
             else {
+                /* avoid cpu panic */
                 msleep(1);
-                continue;
             }
+            continue;
         }
 
+        // TODO: find sync byte in current buf, but not read next packet
         if (buf[0] != 0x47) {
             //printk(KERN_INFO "desync (%x, %x, %x, %x) - %lu\n", buf[0], buf[1], buf[2], buf[3], r);
             while (buf[0] != 0x47) {
@@ -154,6 +160,7 @@ continue;
                 err = DTV_GetData(dvb->itdev, buf, &r);
                 if (r <= 0 || r != 1) {
                     PERROR("read=%lu\n", r);
+                    nFailCount++;
                     goto next;
                 }
             }
@@ -163,30 +170,28 @@ continue;
             DTV_GetData(dvb->itdev, buf+1, &r);
             if (r != 187) {
                 PERROR("remaining read=%lu\n", r);
+                nFailCount++;
                 goto next;
             }
         }
 
         pidFromBuf = ts_getPID(buf);
-        if (pidFromBuf == 0x1FFF) {
+        if (pidFromBuf == 0x1FFF || pidFromBuf != dvb->demux.pid) {
             dvb->netdev->stats.rx_frame_errors++;
             nFailCount++;
+
             if (nFailCount >= RX_MAX_FAIL_COUNT) {
-msleep(5);
-nFailCount = 0;
-continue;
-}
+                /* avoid request storm */
+                msleep(RX_RECV_PERIOD);
+                nFailCount = 0;
+                continue;
+            }
             else
                 continue;
         }
 
         /* reset fail counter */
         nFailCount = 0;
-
-        if (pidFromBuf != dvb->demux.pid) {
-            dvb->netdev->stats.rx_frame_errors++;
-            continue;
-        }
 
         ule_demux(&dvb->demux, buf, len);
 
@@ -220,17 +225,16 @@ continue;
             // netdevice stats
             dvb->netdev->stats.rx_packets++;
             dvb->netdev->stats.rx_bytes += dvb->demux.ule_sndu_outbuf_len;
-                        
+
             // clean & reset outbuf
             kfree(dvb->demux.ule_sndu_outbuf);
             dvb->demux.ule_sndu_outbuf = NULL;
             dvb->demux.ule_sndu_outbuf_len = 0;
         }
 
-    }// end loop
-
 next:
-    schedule_read_task(dvb, RX_RECV_PERIOD);
+        continue;
+    }// end loop
 }
 
 static void startCapture(dvb_netdev* dvb)
