@@ -2,6 +2,7 @@
 
 fs              = require 'fs'
 {spawn, exec}   = require 'child_process'
+path            = require 'path'
 
 
 strim = (s) ->
@@ -29,9 +30,8 @@ extractDevData = (data) ->
 
 main = ->
   if process.argv.length <= 2
-    exec 'iperf --help', (err, stdout, stderr) -> 
-      console.log stdout + stderr
-      process.exit 1
+    console.error "usage: ./#{path.basename process.argv[1]} [net device] [other iperf args...]"
+    process.exit 1
 
   args = process.argv[3..]
   args.push '-yc'
@@ -42,13 +42,13 @@ main = ->
 
   raw = findIF(devName)
   if raw is undefined
-    console.error "#{devName} not found"
+    console.error "netdevice `#{devName}` not found"
     process.exit 1
 
   iperf.stdout.on 'data', (data) ->
     raw = findIF(devName)
     if raw is undefined
-      console.error "#{devName} not found"
+      console.error "netdevice `#{devName}` not found"
 
     devData = extractDevData(raw).join(',')
     data = strim data.toString()
