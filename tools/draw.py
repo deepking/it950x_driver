@@ -10,7 +10,7 @@ def plot(fileName, maxCount):
     with open(fileName) as f:
         i = 0
         for row in csv.DictReader(f, ["1", "2", "3", "4", "5", "6", "7", "8", "9"]):
-            l.append(int(row['9']) / 1024 / 1024)
+            l.append(float(row['9']) / 1024 / 1024)
             i += 1
             if i > maxCount:
                 break
