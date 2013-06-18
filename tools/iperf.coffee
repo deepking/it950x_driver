@@ -35,6 +35,7 @@ main = ->
 
   args = process.argv[3..]
   args.push '-yc'
+  args.push '-i1'
   iperf = spawn 'iperf', args #['-u', '-c', '1.1.1.1', '-i1', '-t10', '-yc']
 
   devName = process.argv[2]
