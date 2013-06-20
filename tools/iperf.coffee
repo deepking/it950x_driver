@@ -4,6 +4,7 @@ fs              = require 'fs'
 {spawn, exec}   = require 'child_process'
 path            = require 'path'
 
+last = undefined
 
 strim = (s) ->
   start = 0
@@ -28,6 +29,17 @@ extractDevData = (data) ->
   data.split(/\s+/)
 
 
+handleData = (arr) ->
+  if last is undefined
+    last = arr
+  else
+    mbps = arr[8] / 1024 / 1024
+    rxNull = arr[14] - last[14]
+    txNull = arr[23] - last[23]
+    console.log "mbps=#{mbps}, rx=#{rxNull}, tx=#{txNull}"
+    last = arr
+
+
 main = ->
   if process.argv.length <= 2
     console.error "usage: ./#{path.basename process.argv[1]} [net device] [other iperf args...]"
@@ -50,9 +62,11 @@ main = ->
     if raw is undefined
       console.error "netdevice `#{devName}` not found"
 
-    devData = extractDevData(raw).join(',')
+    devData = extractDevData(raw)
     data = strim data.toString()
-    console.log data + ',' + devData
+    arrData = data.split(',')
+    arrData = arrData.concat devData
+    handleData arrData
 
   iperf.stderr.on 'data', (data) ->
     console.error data.toString()
