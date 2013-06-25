@@ -36,7 +36,7 @@ handleData = (arr) ->
     mbps = arr[8] / 1024 / 1024
     rxNull = arr[14] - last[14]
     txNull = arr[23] - last[23]
-    console.log "mbps=#{mbps}, rx=#{rxNull}, tx=#{txNull}"
+    console.log "#{mbps},#{rxNull},#{txNull}"
     last = arr
 
 
