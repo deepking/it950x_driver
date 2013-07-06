@@ -11,11 +11,20 @@
 
 * install module:
 
+make 會將 src 複製到 project root，對此 source code 修改，無意義。
+
 ```
     $ make clean
     $ make
     $ sudo make install
 ```
+
+* uninstall module:
+
+```
+    $ sudo make remove
+```
+
 * enable network device:
 
 ```
@@ -24,3 +33,10 @@
 
 * log 位置 /var/log/syslog 
 
+* 修改 Frequency/Bandwidth in src/dvb_net.c :
+
+```c
+    #define SEND_FREQ 666000
+    #define RECV_FREQ 666000
+    #define DEFAULT_BANDWIDTH 6000
+```
