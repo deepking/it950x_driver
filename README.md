@@ -10,13 +10,15 @@
 ## Develop
 
 * install module:
-```    
+
+```
     $ make clean
     $ make
     $ sudo make install
 ```
 * enable network device:
-```    
+
+```
     $ sudo ifconfig dvb0 IP netmask 255.255.255.0
 ```
 
