@@ -1,6 +1,8 @@
-# it950x_driver
+# DVB over IP
 
 ## Structure
+
+* src/api/ 廠商提供 driver
 * src/dvb_api - User API for kernel space
 * src/dvb_net - network device 
 * src/ule - protocol encode/decode
