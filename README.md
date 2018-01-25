@@ -2,11 +2,12 @@
 
 ## Structure
 
-* src/api/ 廠商提供 driver
+
 * src/dvb_api - User API for kernel space
 * src/dvb_net - network device 
 * src/ule - protocol encode/decode
-* src/it950x-core - driver api
+* src/api/ 廠商提供 driver
+* src/it950x-core - 廠商提供 driver api
 * tools 測量工具
 
 ## Develop
